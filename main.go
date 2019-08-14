@@ -76,7 +76,8 @@ func proxyWithMitm(w http.ResponseWriter, r *http.Request) {
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			//証明書の検証を行わない
+			//この実装ではオレオレ証明書にて認証しているlocalhostに対して
+			//アクセスするため, 下記の記載をする
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}

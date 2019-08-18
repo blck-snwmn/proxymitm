@@ -160,5 +160,5 @@ func main() {
 		}),
 	}
 
-	log.Fatal(server.ListenAndServe())
+	log.Println(server.ListenAndServe())
 }

@@ -2,13 +2,19 @@ package main
 
 import (
 	"bufio"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 func proxy(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +63,7 @@ func proxyWithMitm(w http.ResponseWriter, r *http.Request) {
 	defer con.Close()
 
 	// Client との TLS ハンドシェイク
-	tlsConn, err := tlsHandshake(con)
+	tlsConn, err := tlsHandshake(con, r.URL.Hostname())
 	if err != nil {
 		con.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
 		log.Fatal(err)
@@ -74,13 +80,7 @@ func proxyWithMitm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			//この実装ではオレオレ証明書にて認証しているlocalhostに対して
-			//アクセスするため, 下記の記載をする
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	client := &http.Client{}
 	rsp, err := client.Do(req)
 	if err != nil {
 		tlsConn.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
@@ -114,12 +114,17 @@ func connectTCP(w http.ResponseWriter) (net.Conn, error) {
 	return con, nil
 }
 
-func tlsHandshake(con net.Conn) (*tls.Conn, error) {
-	// とりあえず固定の証明書
-	cert, err := tls.LoadX509KeyPair("./server.crt", "./server.key")
+func tlsHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
+	// 接続するドメインの証明書を作成する
+	c, pk, err := createCert(hostName)
 	if err != nil {
 		return nil, err
 	}
+	cert := tls.Certificate{
+		Certificate: [][]byte{c.Raw},
+		PrivateKey:  pk,
+	}
+
 	config := tls.Config{}
 	config.Certificates = []tls.Certificate{cert}
 
@@ -128,6 +133,43 @@ func tlsHandshake(con net.Conn) (*tls.Conn, error) {
 		return nil, err
 	}
 	return tlsConn, nil
+}
+
+func createCert(hostName string) (*x509.Certificate, crypto.PrivateKey, error) {
+	// 自作の認証局の証明書の読み込み
+	cert, err := tls.LoadX509KeyPair("./ca.crt", "./ca.key")
+	if err != nil {
+		return nil, nil, err
+	}
+	// 自作の認証局の証明書で署名された証明書を作成
+	parent, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, nil, err
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1234),
+		DNSNames:     []string{hostName},
+		NotBefore:    now,
+		NotAfter:     now.AddDate(1, 0, 0),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	pub := &priv.PublicKey
+	cb, err := x509.CreateCertificate(
+		rand.Reader,
+		template, parent,
+		pub, cert.PrivateKey,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	c, err := x509.ParseCertificate(cb)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, priv, nil
 }
 
 func createRequest(tlsConn *tls.Conn) (*http.Request, error) {

@@ -42,6 +42,11 @@ func transfer(dest io.WriteCloser, src io.ReadCloser) {
 }
 
 func main() {
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
 	server := &http.Server{
 		Addr: ":18080",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +54,7 @@ func main() {
 			// https の場合、`aa` を出力していることが分かる
 			if r.Method == http.MethodConnect {
 				log.Println("aa")
-				proxyWithMitm(w, r)
+				mp.Handler(w, r)
 				// proxy(w, r)
 			} else {
 				log.Println("bb")

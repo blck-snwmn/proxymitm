@@ -16,10 +16,47 @@ import (
 	"time"
 )
 
-func proxyWithMitm(w http.ResponseWriter, r *http.Request) {
+// MitmProxy is proxy for mitm
+type MitmProxy struct {
+	tlsCert  tls.Certificate
+	x509Cert *x509.Certificate
+}
+
+// CreateMitmProxy load pem, and then it return MitmProxy
+func CreateMitmProxy(certPath, keyPath string) (*MitmProxy, error) {
+	// 自作の認証局の証明書の読み込み
+	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	// 自作の認証局の証明書で署名された証明書を作成
+	x509Cert, err := x509.ParseCertificate(tlsCert.Certificate[0])
+	if err != nil {
+		return nil, err
+	}
+	return &MitmProxy{
+		tlsCert:  tlsCert,
+		x509Cert: x509Cert,
+	}, nil
+}
+
+func mitmx509template(hostName string) *x509.Certificate {
+	now := time.Now()
+	return &x509.Certificate{
+		SerialNumber: big.NewInt(1234),
+		DNSNames:     []string{hostName},
+		NotBefore:    now,
+		NotAfter:     now.AddDate(1, 0, 0),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+}
+
+// Handler handle request for mitim
+func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// TCP コネクションの確立
 	// Server 側とはコネクションを張らず、Client に 200 を返す
-	con, err := connectTCP(w)
+	con, err := mp.connectTCP(w)
 	if err != nil {
 		con.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
 		log.Fatal(err)
@@ -28,7 +65,7 @@ func proxyWithMitm(w http.ResponseWriter, r *http.Request) {
 	defer con.Close()
 
 	// Client との TLS ハンドシェイク
-	tlsConn, err := tlsHandshake(con, r.URL.Hostname())
+	tlsConn, err := mp.tlsHandshake(con, r.URL.Hostname())
 	if err != nil {
 		con.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
 		log.Fatal(err)
@@ -38,7 +75,7 @@ func proxyWithMitm(w http.ResponseWriter, r *http.Request) {
 
 	// データのやりとり
 	// Clientのリクエストをサーバーへ送信
-	req, err := createRequest(tlsConn)
+	req, err := mp.createRequest(tlsConn)
 	if err != nil {
 		tlsConn.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
 		log.Fatal(err)
@@ -59,7 +96,7 @@ func proxyWithMitm(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("end")
 }
-func connectTCP(w http.ResponseWriter) (net.Conn, error) {
+func (mp *MitmProxy) connectTCP(w http.ResponseWriter) (net.Conn, error) {
 	// TCP コネクションの確立
 	// Server 側とはコネクションを張らず、Client に 200 を返す
 	hjk, ok := w.(http.Hijacker)
@@ -79,9 +116,10 @@ func connectTCP(w http.ResponseWriter) (net.Conn, error) {
 	return con, nil
 }
 
-func tlsHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
+func (mp *MitmProxy) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
 	// 接続するドメインの証明書を作成する
-	c, pk, err := createCert(hostName)
+	template := mitmx509template(hostName)
+	c, pk, err := mp.createX509Certificate(template)
 	if err != nil {
 		return nil, err
 	}
@@ -100,32 +138,13 @@ func tlsHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
 	return tlsConn, nil
 }
 
-func createCert(hostName string) (*x509.Certificate, crypto.PrivateKey, error) {
-	// 自作の認証局の証明書の読み込み
-	cert, err := tls.LoadX509KeyPair("./ca.crt", "./ca.key")
-	if err != nil {
-		return nil, nil, err
-	}
-	// 自作の認証局の証明書で署名された証明書を作成
-	parent, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return nil, nil, err
-	}
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1234),
-		DNSNames:     []string{hostName},
-		NotBefore:    now,
-		NotAfter:     now.AddDate(1, 0, 0),
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
+func (mp *MitmProxy) createX509Certificate(template *x509.Certificate) (*x509.Certificate, crypto.PrivateKey, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	pub := &priv.PublicKey
 	cb, err := x509.CreateCertificate(
 		rand.Reader,
-		template, parent,
-		pub, cert.PrivateKey,
+		template, mp.x509Cert,
+		pub, mp.tlsCert.PrivateKey,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -137,7 +156,7 @@ func createCert(hostName string) (*x509.Certificate, crypto.PrivateKey, error) {
 	return c, priv, nil
 }
 
-func createRequest(tlsConn *tls.Conn) (*http.Request, error) {
+func (mp *MitmProxy) createRequest(tlsConn *tls.Conn) (*http.Request, error) {
 	creq, err := http.ReadRequest(bufio.NewReader(tlsConn))
 	if err != nil {
 		return nil, err

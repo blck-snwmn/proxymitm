@@ -131,7 +131,6 @@ func TestMitmProxy_Handler(t *testing.T) {
 		return url, nil
 	}
 
-	
 	proxyURL, err := parseLocalhost(hs.URL)
 	if err != nil {
 		t.Errorf("url parse err. input is %v", hs.URL)
@@ -168,6 +167,63 @@ func TestMitmProxy_Handler(t *testing.T) {
 	rsp, err := client.Get(requestURL.String())
 	if err != nil {
 		t.Errorf("get err")
+		return
+	}
+	rsp.Body.Close()
+}
+
+func TestMitmProxy_Connected(t *testing.T) {
+	//長いがとりあえず
+	// connectTCP, tlsHandshake について
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Errorf("create MitimProxy failed")
+		return
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			t.Error("request method isn't connect")
+			return
+		}
+		con, err := mp.connectTCP(w)
+		if err != nil {
+			t.Error("tcp connect failed")
+			return
+		}
+		defer con.Close()
+
+		tlsConn, err := mp.tlsHandshake(con, r.URL.Hostname())
+		if err != nil {
+			t.Error("handshake failed")
+			return
+		}
+		defer tlsConn.Close()
+		// proxyせずにresponseを返す
+		tlsConn.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
+	}))
+	defer ts.Close()
+
+	url, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Errorf("url parse err. input is %v", ts.URL)
+		return
+	}
+
+	pool := x509.NewCertPool()
+	pool.AddCert(mp.x509Cert)
+
+	client := http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(url),
+			TLSClientConfig: &tls.Config{
+				RootCAs: pool,
+			},
+		},
+	}
+	rsp, err := client.Get("https://localhost:" + url.Port())
+	if err != nil || rsp.StatusCode != http.StatusOK {
+		t.Errorf("access failed")
 		return
 	}
 	rsp.Body.Close()

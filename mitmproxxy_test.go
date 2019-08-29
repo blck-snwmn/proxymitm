@@ -1,7 +1,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"crypto/x509"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
@@ -92,4 +96,79 @@ func TestMitmx509template(t *testing.T) {
 	if !cn {
 		t.Errorf("DNSNames don't contain %s", expected)
 	}
+}
+
+func TestMitmProxy_Handler(t *testing.T) {
+	//長いがとりあえず
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Errorf("create MitimProxy failed")
+		return
+	}
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			t.Error("request method isn't connect")
+			return
+		}
+		mp.Handler(w, r)
+	}))
+	defer hs.Close()
+
+	parseLocalhost := func(urlstr string) (*url.URL, error) {
+		url, err := url.Parse(urlstr)
+		if err != nil {
+			return nil, err
+		}
+		url, err = url.Parse(url.Scheme + "://localhost:" + url.Port())
+		if err != nil {
+			return nil, err
+		}
+		return url, nil
+	}
+
+	
+	proxyURL, err := parseLocalhost(hs.URL)
+	if err != nil {
+		t.Errorf("url parse err. input is %v", hs.URL)
+		return
+	}
+
+	requestURL, err := parseLocalhost(ts.URL)
+	if err != nil {
+		t.Errorf("url parse err. input is %v", ts.URL)
+		return
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(mp.x509Cert)
+
+	// client := ts.Client()
+	mp.client = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+				RootCAs:            pool,
+			},
+		},
+	}
+
+	client := http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: pool,
+			},
+		},
+	}
+
+	rsp, err := client.Get(requestURL.String())
+	if err != nil {
+		t.Errorf("get err")
+		return
+	}
+	rsp.Body.Close()
 }

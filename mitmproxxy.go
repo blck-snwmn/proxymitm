@@ -20,6 +20,7 @@ import (
 type MitmProxy struct {
 	tlsCert  tls.Certificate
 	x509Cert *x509.Certificate
+	client   *http.Client
 }
 
 // CreateMitmProxy load pem, and then it return MitmProxy
@@ -37,6 +38,7 @@ func CreateMitmProxy(certPath, keyPath string) (*MitmProxy, error) {
 	return &MitmProxy{
 		tlsCert:  tlsCert,
 		x509Cert: x509Cert,
+		client:   &http.Client{},
 	}, nil
 }
 
@@ -82,8 +84,7 @@ func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &http.Client{}
-	rsp, err := client.Do(req)
+	rsp, err := mp.client.Do(req)
 	if err != nil {
 		tlsConn.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
 		log.Fatal(err)

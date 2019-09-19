@@ -83,6 +83,8 @@ func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 		return
 	}
+	// コンテキストも渡す
+	req = req.WithContext(r.Context())
 
 	rsp, err := mp.client.Do(req)
 	if err != nil {

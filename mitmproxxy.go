@@ -8,10 +8,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"io"
 	"log"
 	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 )
@@ -95,7 +97,8 @@ func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	defer rsp.Body.Close()
 
 	// ResponseをClientに返す
-	rsp.Write(tlsConn)
+	writer := io.MultiWriter(tlsConn, os.Stdout)
+	rsp.Write(writer)
 
 	log.Println("end")
 }

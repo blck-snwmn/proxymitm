@@ -16,6 +16,12 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"golang.org/x/xerrors"
+)
+
+var (
+	internalServerError = []byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n")
 )
 
 // MitmProxy is proxy for mitm
@@ -62,8 +68,8 @@ func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// Server 側とはコネクションを張らず、Client に 200 を返す
 	con, err := mp.connectTCP(w)
 	if err != nil {
-		con.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
-		log.Fatal(err)
+		con.Write(internalServerError)
+		log.Println(xerrors.Errorf("Failed to connect TCP: %w", err))
 		return
 	}
 	defer con.Close()
@@ -71,8 +77,8 @@ func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// Client との TLS ハンドシェイク
 	tlsConn, err := mp.tlsHandshake(con, r.URL.Hostname())
 	if err != nil {
-		con.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
-		log.Fatal(err)
+		con.Write(internalServerError)
+		log.Println(xerrors.Errorf("Failed to tls handshake: %w", err))
 		return
 	}
 	defer tlsConn.Close()
@@ -81,8 +87,8 @@ func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 	// Clientのリクエストをサーバーへ送信
 	req, err := mp.createRequest(tlsConn)
 	if err != nil {
-		tlsConn.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
-		log.Fatal(err)
+		tlsConn.Write(internalServerError)
+		log.Println(xerrors.Errorf("Failed to create request: %w", err))
 		return
 	}
 	// コンテキストも渡す
@@ -90,8 +96,8 @@ func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 
 	rsp, err := mp.client.Do(req)
 	if err != nil {
-		tlsConn.Write([]byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n"))
-		log.Fatal(err)
+		tlsConn.Write(internalServerError)
+		log.Println(xerrors.Errorf("Failed to send request: %w", err))
 		return
 	}
 	defer rsp.Body.Close()
@@ -116,8 +122,7 @@ func (mp *MitmProxy) connectTCP(w http.ResponseWriter) (net.Conn, error) {
 
 	//コネクションが張れたため、200 を返す
 	// ハイジャックをしているため w.WriteHeader 使えない
-	con.Write([]byte("HTTP/1.0 200 Connection established"))
-	con.Write([]byte("\r\n\r\n"))
+	con.Write([]byte("HTTP/1.0 200 Connection established \r\n\r\n"))
 
 	return con, nil
 }

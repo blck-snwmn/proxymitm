@@ -24,11 +24,48 @@ var (
 	internalServerError = []byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n")
 )
 
+var _ http.Handler = (*MitmProxy)(nil)
+
+func New(certPath, keyPath string) (*http.Server, error) {
+	// 自作の認証局の証明書の読み込み
+	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	// 自作の認証局の証明書で署名された証明書を作成
+	x509Cert, err := x509.ParseCertificate(tlsCert.Certificate[0])
+	if err != nil {
+		return nil, err
+	}
+	mitm := MitmProxy{
+		tlsCert:  tlsCert,
+		x509Cert: x509Cert,
+		client:   &http.Client{},
+	}
+	server := http.Server{
+		Handler: &mitm,
+	}
+
+	return &server, nil
+}
+
 // MitmProxy is proxy for mitm
 type MitmProxy struct {
 	tlsCert  tls.Certificate
 	x509Cert *x509.Certificate
 	client   *http.Client
+}
+
+func mitmx509template(hostName string) *x509.Certificate {
+	now := time.Now()
+	return &x509.Certificate{
+		SerialNumber: big.NewInt(1234),
+		DNSNames:     []string{hostName},
+		NotBefore:    now,
+		NotAfter:     now.AddDate(1, 0, 0),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
 }
 
 // CreateMitmProxy load pem, and then it return MitmProxy
@@ -50,20 +87,8 @@ func CreateMitmProxy(certPath, keyPath string) (*MitmProxy, error) {
 	}, nil
 }
 
-func mitmx509template(hostName string) *x509.Certificate {
-	now := time.Now()
-	return &x509.Certificate{
-		SerialNumber: big.NewInt(1234),
-		DNSNames:     []string{hostName},
-		NotBefore:    now,
-		NotAfter:     now.AddDate(1, 0, 0),
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-}
-
 // Handler handle request for mitim
-func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
+func (mp *MitmProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// TCP コネクションの確立
 	// Server 側とはコネクションを張らず、Client に 200 を返す
 	con, err := mp.connectTCP(w)
@@ -108,6 +133,7 @@ func (mp *MitmProxy) Handler(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("end")
 }
+
 func (mp *MitmProxy) connectTCP(w http.ResponseWriter) (net.Conn, error) {
 	// TCP コネクションの確立
 	// Server 側とはコネクションを張らず、Client に 200 を返す

@@ -115,7 +115,7 @@ func TestMitmProxy_Handler(t *testing.T) {
 			t.Error("request method isn't connect")
 			return
 		}
-		mp.Handler(w, r)
+		mp.ServeHTTP(w, r)
 	}))
 	defer hs.Close()
 
@@ -180,7 +180,6 @@ func TestMitmProxy_Connected(t *testing.T) {
 		t.Errorf("create MitimProxy failed")
 		return
 	}
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect {
 			t.Error("request method isn't connect")

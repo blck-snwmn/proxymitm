@@ -20,7 +20,7 @@ func main() {
 			// https の場合、`aa` を出力していることが分かる
 			if r.Method == http.MethodConnect {
 				log.Println("aa")
-				mp.Handler(w, r)
+				mp.ServeHTTP(w, r)
 				// proxy(w, r)
 			} else {
 				log.Println("bb")

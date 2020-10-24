@@ -115,7 +115,7 @@ func TestMitmProxy_Handler(t *testing.T) {
 			t.Error("request method isn't connect")
 			return
 		}
-		mp.ServeHTTP(w, r)
+		mp.handle(w, r)
 	}))
 	defer hs.Close()
 
@@ -185,7 +185,7 @@ func TestMitmProxy_Connected(t *testing.T) {
 			t.Error("request method isn't connect")
 			return
 		}
-		con, err := mp.connectTCP(w)
+		con, err := connectTCP(w)
 		if err != nil {
 			t.Error("tcp connect failed")
 			return

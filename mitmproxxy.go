@@ -20,12 +20,54 @@ import (
 	"golang.org/x/xerrors"
 )
 
+func proxy(w http.ResponseWriter, r *http.Request) {
+	hjk, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "Not available http.Hijacker", http.StatusInternalServerError)
+		return
+	}
+	con, _, err := hjk.Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer con.Close()
+
+	newReq, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+	if err != nil {
+		http.Error(w, "Failed to http.NewRequest()", http.StatusInternalServerError)
+		return
+	}
+	client := http.Client{}
+	resp, err := client.Do(newReq)
+	if err != nil {
+		http.Error(w, "Failed to http request", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	writer := io.MultiWriter(con, os.Stdout)
+	resp.Write(writer)
+}
+
 var (
 	internalServerError = []byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n")
 )
 
 var _ http.Handler = (*MitmProxy)(nil)
+var _ http.Handler = (*ServerMux)(nil)
 
+type ServerMux struct {
+	mitmProxy *MitmProxy
+}
+
+func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodConnect {
+		mp.mitmProxy.ServeHTTP(w, r)
+	} else {
+		proxy(w, r)
+	}
+}
 func New(certPath, keyPath string) (*http.Server, error) {
 	// 自作の認証局の証明書の読み込み
 	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
@@ -43,7 +85,7 @@ func New(certPath, keyPath string) (*http.Server, error) {
 		client:   &http.Client{},
 	}
 	server := http.Server{
-		Handler: &mitm,
+		Handler: &ServerMux{&mitm},
 	}
 
 	return &server, nil

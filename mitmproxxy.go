@@ -38,6 +38,7 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to http.NewRequest()", http.StatusInternalServerError)
 		return
 	}
+	newReq = newReq.WithContext(r.Context())
 	client := http.Client{}
 	resp, err := client.Do(newReq)
 	if err != nil {
@@ -54,20 +55,76 @@ var (
 	internalServerError = []byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n")
 )
 
-var _ http.Handler = (*MitmProxy)(nil)
 var _ http.Handler = (*ServerMux)(nil)
 
 type ServerMux struct {
-	mitmProxy *MitmProxy
+	tlsCert  tls.Certificate
+	x509Cert *x509.Certificate
+	client   *http.Client
 }
 
 func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodConnect {
-		mp.mitmProxy.ServeHTTP(w, r)
-	} else {
-		proxy(w, r)
+	var newReq *http.Request
+	// TCP コネクションの確立
+	// Server 側とはコネクションを張らず、Client に 200 を返す
+	hjk, ok := w.(http.Hijacker)
+	if !ok {
+		log.Println("Failed to hijack")
+		http.Error(w, "Not available http.Hijacker", http.StatusInternalServerError)
+		return
 	}
+	con, _, err := hjk.Hijack()
+	if err != nil {
+		log.Println(xerrors.Errorf("Failed to connect TCP: %w", err))
+		con.Write(internalServerError)
+		return
+	}
+	defer con.Close()
+
+	switch r.Method {
+	case http.MethodConnect:
+		//コネクションが張れたため、200 を返す
+		// ハイジャックをしているため w.WriteHeader 使えない
+		con.Write([]byte("HTTP/1.0 200 Connection established \r\n\r\n"))
+
+		// Client との TLS ハンドシェイク
+		con, err = mp.tlsHandshake(con, r.URL.Hostname())
+		if err != nil {
+			log.Println(xerrors.Errorf("Failed to tls handshake: %w", err))
+			con.Write(internalServerError)
+			return
+		}
+		defer con.Close()
+		// データのやりとり
+		// Clientのリクエストをサーバーへ送信
+		newReq, err = mp.createRequest(con)
+		if err != nil {
+			log.Println(xerrors.Errorf("Failed to create request: %w", err))
+			con.Write(internalServerError)
+			return
+		}
+	default:
+		newReq, err = http.NewRequest(r.Method, r.URL.String(), r.Body)
+		if err != nil {
+			log.Println(xerrors.Errorf("Failed to create request: %w", err))
+			http.Error(w, "Failed to http.NewRequest()", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	newReq = newReq.WithContext(r.Context())
+	resp, err := mp.client.Do(newReq)
+	if err != nil {
+		log.Println(xerrors.Errorf("Failed to send request: %w", err))
+		http.Error(w, "Failed to http request", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	writer := io.MultiWriter(con, os.Stdout)
+	resp.Write(writer)
 }
+
 func New(certPath, keyPath string) (*http.Server, error) {
 	// 自作の認証局の証明書の読み込み
 	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
@@ -79,23 +136,15 @@ func New(certPath, keyPath string) (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	mitm := MitmProxy{
-		tlsCert:  tlsCert,
-		x509Cert: x509Cert,
-		client:   &http.Client{},
-	}
 	server := http.Server{
-		Handler: &ServerMux{&mitm},
+		Handler: &ServerMux{
+			tlsCert:  tlsCert,
+			x509Cert: x509Cert,
+			client:   &http.Client{},
+		},
 	}
 
 	return &server, nil
-}
-
-// MitmProxy is proxy for mitm
-type MitmProxy struct {
-	tlsCert  tls.Certificate
-	x509Cert *x509.Certificate
-	client   *http.Client
 }
 
 func mitmx509template(hostName string) *x509.Certificate {
@@ -111,7 +160,7 @@ func mitmx509template(hostName string) *x509.Certificate {
 }
 
 // CreateMitmProxy load pem, and then it return MitmProxy
-func CreateMitmProxy(certPath, keyPath string) (*MitmProxy, error) {
+func CreateMitmProxy(certPath, keyPath string) (*ServerMux, error) {
 	// 自作の認証局の証明書の読み込み
 	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
@@ -122,7 +171,7 @@ func CreateMitmProxy(certPath, keyPath string) (*MitmProxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &MitmProxy{
+	return &ServerMux{
 		tlsCert:  tlsCert,
 		x509Cert: x509Cert,
 		client:   &http.Client{},
@@ -130,10 +179,10 @@ func CreateMitmProxy(certPath, keyPath string) (*MitmProxy, error) {
 }
 
 // Handler handle request for mitim
-func (mp *MitmProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (mp *ServerMux) handle(w http.ResponseWriter, r *http.Request) {
 	// TCP コネクションの確立
 	// Server 側とはコネクションを張らず、Client に 200 を返す
-	con, err := mp.connectTCP(w)
+	con, err := connectTCP(w)
 	if err != nil {
 		con.Write(internalServerError)
 		log.Println(xerrors.Errorf("Failed to connect TCP: %w", err))
@@ -176,7 +225,7 @@ func (mp *MitmProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Println("end")
 }
 
-func (mp *MitmProxy) connectTCP(w http.ResponseWriter) (net.Conn, error) {
+func connectTCP(w http.ResponseWriter) (net.Conn, error) {
 	// TCP コネクションの確立
 	// Server 側とはコネクションを張らず、Client に 200 を返す
 	hjk, ok := w.(http.Hijacker)
@@ -195,7 +244,7 @@ func (mp *MitmProxy) connectTCP(w http.ResponseWriter) (net.Conn, error) {
 	return con, nil
 }
 
-func (mp *MitmProxy) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
+func (mp *ServerMux) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
 	// 接続するドメインの証明書を作成する
 	template := mitmx509template(hostName)
 	c, pk, err := mp.createX509Certificate(template)
@@ -217,7 +266,7 @@ func (mp *MitmProxy) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, err
 	return tlsConn, nil
 }
 
-func (mp *MitmProxy) createX509Certificate(template *x509.Certificate) (*x509.Certificate, crypto.PrivateKey, error) {
+func (mp *ServerMux) createX509Certificate(template *x509.Certificate) (*x509.Certificate, crypto.PrivateKey, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	pub := &priv.PublicKey
 	cb, err := x509.CreateCertificate(
@@ -235,7 +284,7 @@ func (mp *MitmProxy) createX509Certificate(template *x509.Certificate) (*x509.Ce
 	return c, priv, nil
 }
 
-func (mp *MitmProxy) createRequest(tlsConn *tls.Conn) (*http.Request, error) {
+func (mp *ServerMux) createRequest(tlsConn net.Conn) (*http.Request, error) {
 	creq, err := http.ReadRequest(bufio.NewReader(tlsConn))
 	if err != nil {
 		return nil, err

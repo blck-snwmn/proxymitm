@@ -35,16 +35,17 @@ type ServerMux struct {
 func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var newReq *http.Request
 	// TCP コネクションの確立
-	// Server 側とはコネクションを張らず、Client に 200 を返す
 	hjk, ok := w.(http.Hijacker)
 	if !ok {
-		log.Println("Failed to hijack")
-		http.Error(w, "Not available http.Hijacker", http.StatusInternalServerError)
+		proxyErr := NewProxyError(ErrHijack, "hijack", "http.Hijacker not available", nil)
+		log.Printf("Error: %v", proxyErr)
+		http.Error(w, proxyErr.Message, http.StatusInternalServerError)
 		return
 	}
 	con, _, err := hjk.Hijack()
 	if err != nil {
-		log.Println(xerrors.Errorf("Failed to connect TCP: %w", err))
+		proxyErr := NewProxyError(ErrHijack, "hijack", "failed to hijack connection", err)
+		log.Printf("Error: %v", proxyErr)
 		con.Write(internalServerError)
 		return
 	}
@@ -53,13 +54,12 @@ func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodConnect:
 		//コネクションが張れたため、200 を返す
-		// ハイジャックをしているため w.WriteHeader 使えない
 		con.Write([]byte("HTTP/1.0 200 Connection established \r\n\r\n"))
 
 		// Client との TLS ハンドシェイク
 		con, err = mp.tlsHandshake(con, r.URL.Hostname())
 		if err != nil {
-			log.Println(xerrors.Errorf("Failed to tls handshake: %w", err))
+			log.Printf("Error: %v", err)
 			con.Write(internalServerError)
 			return
 		}
@@ -68,15 +68,16 @@ func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Clientのリクエストをサーバーへ送信
 		newReq, err = mp.createRequest(con)
 		if err != nil {
-			log.Println(xerrors.Errorf("Failed to create request: %w", err))
+			log.Printf("Error: %v", err)
 			con.Write(internalServerError)
 			return
 		}
 	default:
 		newReq, err = http.NewRequest(r.Method, r.URL.String(), r.Body)
 		if err != nil {
-			log.Println(xerrors.Errorf("Failed to create request: %w", err))
-			http.Error(w, "Failed to http.NewRequest()", http.StatusInternalServerError)
+			proxyErr := NewProxyError(ErrCreateRequest, "new_request", "failed to create request", err)
+			log.Printf("Error: %v", proxyErr)
+			http.Error(w, proxyErr.Message, http.StatusInternalServerError)
 			return
 		}
 	}
@@ -84,8 +85,9 @@ func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	newReq = newReq.WithContext(r.Context())
 	resp, err := mp.client.Do(newReq)
 	if err != nil {
-		log.Println(xerrors.Errorf("Failed to send request: %w", err))
-		http.Error(w, "Failed to http request", http.StatusInternalServerError)
+		proxyErr := NewProxyError(ErrSendRequest, "do_request", "failed to send request", err)
+		log.Printf("Error: %v", proxyErr)
+		http.Error(w, proxyErr.Message, http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
@@ -98,12 +100,12 @@ func New(certPath, keyPath string) (*http.Server, error) {
 	// 自作の認証局の証明書の読み込み
 	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
-		return nil, err
+		return nil, NewProxyError(ErrCertificate, "load_cert", "failed to load certificate", err)
 	}
 	// 自作の認証局の証明書で署名された証明書を作成
 	x509Cert, err := x509.ParseCertificate(tlsCert.Certificate[0])
 	if err != nil {
-		return nil, err
+		return nil, NewProxyError(ErrCertificate, "parse_cert", "failed to parse certificate", err)
 	}
 	server := http.Server{
 		Handler: &ServerMux{
@@ -218,7 +220,7 @@ func (mp *ServerMux) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, err
 	template := mitmx509template(hostName)
 	c, pk, err := mp.createX509Certificate(template)
 	if err != nil {
-		return nil, err
+		return nil, NewProxyError(ErrTLSHandshake, "create_cert", "failed to create certificate", err)
 	}
 	cert := tls.Certificate{
 		Certificate: [][]byte{c.Raw},
@@ -230,7 +232,7 @@ func (mp *ServerMux) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, err
 
 	tlsConn := tls.Server(con, &config)
 	if err = tlsConn.Handshake(); err != nil {
-		return nil, err
+		return nil, NewProxyError(ErrTLSHandshake, "handshake", "failed to perform TLS handshake", err)
 	}
 	return tlsConn, nil
 }
@@ -256,13 +258,13 @@ func (mp *ServerMux) createX509Certificate(template *x509.Certificate) (*x509.Ce
 func (mp *ServerMux) createRequest(tlsConn net.Conn) (*http.Request, error) {
 	creq, err := http.ReadRequest(bufio.NewReader(tlsConn))
 	if err != nil {
-		return nil, err
+		return nil, NewProxyError(ErrCreateRequest, "read_request", "failed to read request", err)
 	}
 
 	requestURL := "https://" + creq.Host + creq.RequestURI
 	creq, err = http.NewRequest(creq.Method, requestURL, creq.Body)
 	if err != nil {
-		return nil, err
+		return nil, NewProxyError(ErrCreateRequest, "new_request", "failed to create request", err)
 	}
 	return creq, nil
 }

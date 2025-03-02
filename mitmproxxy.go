@@ -20,37 +20,6 @@ import (
 	"golang.org/x/xerrors"
 )
 
-func proxy(w http.ResponseWriter, r *http.Request) {
-	hjk, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "Not available http.Hijacker", http.StatusInternalServerError)
-		return
-	}
-	con, _, err := hjk.Hijack()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer con.Close()
-
-	newReq, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
-	if err != nil {
-		http.Error(w, "Failed to http.NewRequest()", http.StatusInternalServerError)
-		return
-	}
-	newReq = newReq.WithContext(r.Context())
-	client := http.Client{}
-	resp, err := client.Do(newReq)
-	if err != nil {
-		http.Error(w, "Failed to http request", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	writer := io.MultiWriter(con, os.Stdout)
-	resp.Write(writer)
-}
-
 var (
 	internalServerError = []byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n")
 )

@@ -3,10 +3,13 @@ package proxymitm
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 )
 
 func TestCreateMitmProxy(t *testing.T) {
@@ -227,3 +230,123 @@ func TestMitmProxy_Connected(t *testing.T) {
 	}
 	rsp.Body.Close()
 }
+
+func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	// Create a test server that will be proxied to
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Hello from target"))
+	}))
+	defer targetServer.Close()
+
+	// Create a test request with a valid URL
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	w := httptest.NewRecorder()
+
+	// Test the ServeHTTP method
+	mp.ServeHTTP(w, req)
+
+	// Since this is a non-CONNECT request, we expect an internal server error
+	// because the proxy is primarily designed for CONNECT requests
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status code %d, got %d", http.StatusInternalServerError, w.Code)
+	}
+}
+
+func TestServerMux_ServeHTTP_Errors(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		method        string
+		url           string
+		expectedCode  int
+	}{
+		{
+			name:          "Invalid Method",
+			method:        "INVALID",
+			url:          "http://example.com",
+			expectedCode: http.StatusInternalServerError,
+		},
+		{
+			name:          "Empty URL",
+			method:        http.MethodGet,
+			url:          "http://",
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest(tt.method, tt.url, nil)
+			w := httptest.NewRecorder()
+
+			mp.ServeHTTP(w, req)
+
+			if w.Code != tt.expectedCode {
+				t.Errorf("Expected status code %d, got %d", tt.expectedCode, w.Code)
+			}
+		})
+	}
+}
+
+func TestServerMux_CreateRequest(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	// Create a mock connection that returns a valid HTTP request
+	mockConn := &mockConn{
+		readData: []byte("GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n"),
+	}
+
+	req, err := mp.createRequest(mockConn)
+	if err != nil {
+		t.Fatalf("createRequest failed: %v", err)
+	}
+
+	if req.Method != "GET" {
+		t.Errorf("Expected method GET, got %s", req.Method)
+	}
+	if req.URL.String() != "https://example.com/path" {
+		t.Errorf("Expected URL https://example.com/path, got %s", req.URL.String())
+	}
+}
+
+// mockConn implements the net.Conn interface for testing
+type mockConn struct {
+	readData []byte
+	readPos  int
+}
+
+func (m *mockConn) Read(b []byte) (n int, err error) {
+	if m.readPos >= len(m.readData) {
+		return 0, io.EOF
+	}
+	n = copy(b, m.readData[m.readPos:])
+	m.readPos += n
+	return n, nil
+}
+
+// Implement other required net.Conn interface methods
+func (m *mockConn) Write(b []byte) (n int, err error)             { return len(b), nil }
+func (m *mockConn) Close() error                                  { return nil }
+func (m *mockConn) LocalAddr() net.Addr                          { return nil }
+func (m *mockConn) RemoteAddr() net.Addr                         { return nil }
+func (m *mockConn) SetDeadline(t time.Time) error                { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error            { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error           { return nil }

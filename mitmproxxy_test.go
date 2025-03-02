@@ -211,7 +211,10 @@ func TestMitmProxy_Connected(t *testing.T) {
 		}
 		defer tlsConn.Close()
 		// proxyせずにresponseを返す
-		tlsConn.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
+		if _, err := tlsConn.Write([]byte("HTTP/1.0 200 OK\r\n\r\n")); err != nil {
+			t.Error("failed to write response")
+			return
+		}
 	}))
 	defer ts.Close()
 
@@ -250,7 +253,9 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 	// Create a test server that will be proxied to
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Hello from target"))
+		if _, err := w.Write([]byte("Hello from target")); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	}))
 	defer targetServer.Close()
 
@@ -494,33 +499,34 @@ func TestServerMux_ForwardRequest(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader("test response")),
 	}
 
-	// Create a mock client
-	mockClient := &mockHTTPClient{
-		response: mockResp,
-		err:      nil,
-	}
-	mp.client = mockClient
-
 	tests := []struct {
 		name    string
-		setup   func() (*http.Request, net.Conn)
+		setup   func() (*http.Request, net.Conn, HTTPClient)
 		wantErr bool
 	}{
 		{
 			name: "successful forward",
-			setup: func() (*http.Request, net.Conn) {
+			setup: func() (*http.Request, net.Conn, HTTPClient) {
 				req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-				return req, mockConn
+				// 成功ケース用のモッククライアントを作成
+				successClient := &mockHTTPClient{
+					response: mockResp,
+					err:      nil,
+				}
+				return req, mockConn, successClient
 			},
 			wantErr: false,
 		},
 		{
 			name: "client error",
-			setup: func() (*http.Request, net.Conn) {
+			setup: func() (*http.Request, net.Conn, HTTPClient) {
 				req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-				mockClient.response = nil
-				mockClient.err = errors.New("client error")
-				return req, mockConn
+				// エラーケース用のモッククライアントを作成
+				errorClient := &mockHTTPClient{
+					response: nil,
+					err:      errors.New("client error"),
+				}
+				return req, mockConn, errorClient
 			},
 			wantErr: true,
 		},
@@ -530,7 +536,9 @@ func TestServerMux_ForwardRequest(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			req, conn := tt.setup()
+			req, conn, client := tt.setup()
+			// テストケースごとにクライアントを設定
+			mp.client = client
 			err := mp.forwardRequest(conn, req)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("forwardRequest() error = %v, wantErr %v", err, tt.wantErr)
@@ -567,7 +575,9 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	secretPayload := "SECRET_PAYLOAD_FOR_MITM_TEST"
 	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte(secretPayload))
+		if _, err := w.Write([]byte(secretPayload)); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	}))
 	defer testServer.Close()
 
@@ -626,7 +636,9 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	// 簡易的なテスト用のHTTPサーバーを作成
 	simpleServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte(secretPayload))
+		if _, err := w.Write([]byte(secretPayload)); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
 	}))
 	defer simpleServer.Close()
 

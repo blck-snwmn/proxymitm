@@ -350,6 +350,9 @@ func (mp *ServerMux) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, err
 
 func (mp *ServerMux) createX509Certificate(template *x509.Certificate) (*x509.Certificate, crypto.PrivateKey, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, NewProxyError(ErrTLSHandshake, "generate_key", "failed to generate RSA key", err)
+	}
 	pub := &priv.PublicKey
 	cb, err := x509.CreateCertificate(
 		rand.Reader,
@@ -399,7 +402,9 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 // handleConnectError はCONNECTメソッドのエラーハンドリングを提供します
 func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
 	mp.logger.Error("Connect error: %v", err)
-	con.Write(internalServerError)
+	if _, writeErr := con.Write(internalServerError); writeErr != nil {
+		mp.logger.Error("Failed to write error response: %v", writeErr)
+	}
 }
 
 // TLSHandshake はTLSHandshakerインターフェースの実装です

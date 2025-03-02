@@ -11,9 +11,31 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// testInterceptor はテスト用のHTTPインターセプター
+type testInterceptor struct {
+	name     string
+	logger   Logger
+	recordFn func(string)
+}
+
+// ProcessRequest はリクエストを処理し、処理順序を記録します
+func (ti *testInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
+	ti.recordFn(ti.name + "-request")
+	req.Header.Add("X-Processed-By", ti.name)
+	return req, false, nil
+}
+
+// ProcessResponse はレスポンスを処理し、処理順序を記録します
+func (ti *testInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
+	ti.recordFn(ti.name + "-response")
+	resp.Header.Add("X-Processed-By", ti.name)
+	return resp, nil
+}
 
 func TestCreateMitmProxy(t *testing.T) {
 	t.Run("failed, because load no exist file", func(t *testing.T) {
@@ -565,6 +587,326 @@ type mockConnWithBuffer struct {
 
 func (m *mockConnWithBuffer) Write(b []byte) (n int, err error) {
 	return m.buffer.Write(b)
+}
+
+// TestMitmProxy_WithInterceptors はインターセプターを使用したMITMプロキシのテスト
+func TestMitmProxy_WithInterceptors(t *testing.T) {
+	t.Parallel()
+
+	// MITMプロキシを作成
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	// ロギングインターセプターを追加
+	loggingInterceptor := NewLoggingInterceptor(mp.logger)
+	mp.AddInterceptor(loggingInterceptor)
+
+	// コンテンツ変更インターセプターを追加
+	contentModifier := NewContentModifierInterceptor(mp.logger)
+	contentModifier.AddRequestHeaderModification("User-Agent", "TestAgent/1.0")
+	contentModifier.AddResponseHeaderModification("X-Test-Header", "TestValue")
+	contentModifier.AddBodyReplacement("test-content", "modified-content")
+	mp.AddInterceptor(contentModifier)
+
+	// テストリクエストを作成
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	req.Header.Set("User-Agent", "OriginalAgent/1.0")
+
+	// オリジナルのレスポンスを作成
+	originalResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("This is a test-content for interceptor test")),
+	}
+	originalResp.Header.Set("Content-Type", "text/plain")
+
+	// インターセプターチェーンを通してリクエストを処理
+	modifiedReq := req
+	var skip bool
+	var processErr error
+
+	for _, interceptor := range mp.interceptors {
+		modifiedReq, skip, processErr = interceptor.ProcessRequest(modifiedReq)
+		if processErr != nil {
+			t.Fatalf("ProcessRequest failed: %v", processErr)
+		}
+		if skip {
+			t.Fatalf("ProcessRequest returned skip=true")
+		}
+	}
+
+	// リクエストヘッダーを検証
+	userAgent := modifiedReq.Header.Get("User-Agent")
+	if userAgent != "TestAgent/1.0" {
+		t.Errorf("User-Agent header was not modified, got %q, want %q", userAgent, "TestAgent/1.0")
+	}
+
+	// インターセプターチェーンを逆順に通してレスポンスを処理
+	modifiedResp := originalResp
+	var respErr error
+
+	for i := len(mp.interceptors) - 1; i >= 0; i-- {
+		modifiedResp, respErr = mp.interceptors[i].ProcessResponse(modifiedResp, modifiedReq)
+		if respErr != nil {
+			t.Fatalf("ProcessResponse failed: %v", respErr)
+		}
+	}
+
+	// レスポンスヘッダーを検証
+	if modifiedResp.Header.Get("X-Test-Header") != "TestValue" {
+		t.Errorf("X-Test-Header was not added, got %q, want %q", modifiedResp.Header.Get("X-Test-Header"), "TestValue")
+	}
+
+	// レスポンスボディを読み取り
+	body, err := io.ReadAll(modifiedResp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	// ボディが変更されていることを確認
+	if !strings.Contains(string(body), "modified-content") {
+		t.Errorf("Response body was not modified, got %q, expected to contain %q", string(body), "modified-content")
+	}
+}
+
+// TestMitmProxy_InterceptorChain はインターセプターチェーンの処理順序をテスト
+func TestMitmProxy_InterceptorChain(t *testing.T) {
+	t.Parallel()
+
+	// 処理順序を記録するためのスライス
+	var processingOrder []string
+	var mu sync.Mutex
+
+	// 処理順序を記録する関数
+	recordProcessing := func(name string) {
+		mu.Lock()
+		defer mu.Unlock()
+		processingOrder = append(processingOrder, name)
+	}
+
+	// テスト用のインターセプター
+	interceptor1 := &testInterceptor{name: "interceptor1", logger: NewDefaultLogger(LogLevelDebug), recordFn: recordProcessing}
+	interceptor2 := &testInterceptor{name: "interceptor2", logger: NewDefaultLogger(LogLevelDebug), recordFn: recordProcessing}
+	interceptor3 := &testInterceptor{name: "interceptor3", logger: NewDefaultLogger(LogLevelDebug), recordFn: recordProcessing}
+
+	// MITMプロキシを作成
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	// 3つのテストインターセプターを追加
+	mp.AddInterceptor(interceptor1)
+	mp.AddInterceptor(interceptor2)
+	mp.AddInterceptor(interceptor3)
+
+	// テストリクエストとレスポンスを作成
+	req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Body:       io.NopCloser(strings.NewReader("Interceptor chain test")),
+		Header:     make(http.Header),
+	}
+
+	// インターセプターチェーンを通してリクエストを処理
+	modifiedReq := req
+	var skip bool
+	var processErr error
+
+	for _, interceptor := range mp.interceptors {
+		modifiedReq, skip, processErr = interceptor.ProcessRequest(modifiedReq)
+		if processErr != nil {
+			t.Fatalf("ProcessRequest failed: %v", processErr)
+		}
+		if skip {
+			t.Fatalf("ProcessRequest returned skip=true")
+		}
+	}
+
+	// リクエストヘッダーを検証
+	processedBy := modifiedReq.Header.Values("X-Processed-By")
+	if len(processedBy) != 3 {
+		t.Errorf("Expected 3 X-Processed-By headers, got %d", len(processedBy))
+	}
+
+	// インターセプターチェーンを逆順に通してレスポンスを処理
+	modifiedResp := resp
+	var respErr error
+
+	for i := len(mp.interceptors) - 1; i >= 0; i-- {
+		modifiedResp, respErr = mp.interceptors[i].ProcessResponse(modifiedResp, modifiedReq)
+		if respErr != nil {
+			t.Fatalf("ProcessResponse failed: %v", respErr)
+		}
+	}
+
+	// レスポンスヘッダーを検証
+	processedBy = modifiedResp.Header.Values("X-Processed-By")
+	if len(processedBy) != 3 {
+		t.Errorf("Expected 3 X-Processed-By headers, got %d", len(processedBy))
+	}
+
+	// 処理順序を検証
+	expectedOrder := []string{
+		"interceptor1-request",
+		"interceptor2-request",
+		"interceptor3-request",
+		"interceptor3-response",
+		"interceptor2-response",
+		"interceptor1-response",
+	}
+
+	// 処理順序が正しいか確認
+	if len(processingOrder) != len(expectedOrder) {
+		t.Errorf("Expected %d processing steps, got %d", len(expectedOrder), len(processingOrder))
+	} else {
+		for i, step := range expectedOrder {
+			if i >= len(processingOrder) || processingOrder[i] != step {
+				t.Errorf("Processing order mismatch at step %d: expected %q, got %q", i, step, processingOrder[i])
+			}
+		}
+	}
+}
+
+// TestMitmProxy_FilteringInterceptor はフィルタリングインターセプターのテスト
+func TestMitmProxy_FilteringInterceptor(t *testing.T) {
+	t.Parallel()
+
+	// MITMプロキシを作成
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	// フィルタリングインターセプターを追加
+	filteringInterceptor := NewFilteringInterceptor(mp.logger)
+	filteringInterceptor.AddBlockedHost("blocked.example.com")
+	filteringInterceptor.AddBlockedPath("/blocked")
+	filteringInterceptor.SetBlockResponse(http.StatusForbidden, "403 Forbidden", "This resource is blocked by test")
+	mp.AddInterceptor(filteringInterceptor)
+
+	// 通常のリクエストのテスト
+	t.Run("Normal request", func(t *testing.T) {
+		// 通常のリクエストを作成
+		req := httptest.NewRequest(http.MethodGet, "https://example.com/normal", nil)
+
+		// リクエスト処理をテスト
+		modifiedReq, skip, err := filteringInterceptor.ProcessRequest(req)
+		if err != nil {
+			t.Fatalf("ProcessRequest failed: %v", err)
+		}
+		if skip {
+			t.Errorf("ProcessRequest returned skip=true for normal request")
+		}
+		if modifiedReq != req {
+			t.Errorf("ProcessRequest modified the normal request")
+		}
+
+		// レスポンス処理をテスト
+		originalResp := &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader("Normal content")),
+			Header:     make(http.Header),
+		}
+
+		resp, err := filteringInterceptor.ProcessResponse(originalResp, req)
+		if err != nil {
+			t.Fatalf("ProcessResponse failed: %v", err)
+		}
+		if resp != originalResp {
+			t.Errorf("ProcessResponse modified the normal response")
+		}
+	})
+
+	// ブロックされるパスへのリクエストのテスト
+	t.Run("Blocked path request", func(t *testing.T) {
+		// ブロックされるパスへのリクエストを作成
+		req := httptest.NewRequest(http.MethodGet, "https://example.com/blocked", nil)
+
+		// リクエスト処理をテスト
+		_, skip, err := filteringInterceptor.ProcessRequest(req)
+		if err != nil {
+			t.Fatalf("ProcessRequest failed: %v", err)
+		}
+		if !skip {
+			t.Errorf("ProcessRequest returned skip=false for blocked path")
+		}
+
+		// レスポンス処理をテスト
+		originalResp := &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader("This should not be returned")),
+			Header:     make(http.Header),
+		}
+
+		resp, err := filteringInterceptor.ProcessResponse(originalResp, req)
+		if err != nil {
+			t.Fatalf("ProcessResponse failed: %v", err)
+		}
+
+		// ブロックレスポンスが返されることを確認
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("Expected status code %d, got %d", http.StatusForbidden, resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("Failed to read response body: %v", err)
+		}
+
+		if string(body) != "This resource is blocked by test" {
+			t.Errorf("Unexpected response body: %q", string(body))
+		}
+	})
+
+	// ブロックされるホストへのリクエストのテスト
+	t.Run("Blocked host request", func(t *testing.T) {
+		// ブロックされるホストへのリクエストを作成
+		req := httptest.NewRequest(http.MethodGet, "https://blocked.example.com/", nil)
+		req.Host = "blocked.example.com"
+
+		// リクエスト処理をテスト
+		_, skip, err := filteringInterceptor.ProcessRequest(req)
+		if err != nil {
+			t.Fatalf("ProcessRequest failed: %v", err)
+		}
+		if !skip {
+			t.Errorf("ProcessRequest returned skip=false for blocked host")
+		}
+
+		// レスポンス処理をテスト
+		originalResp := &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader("This should not be returned")),
+			Header:     make(http.Header),
+		}
+
+		resp, err := filteringInterceptor.ProcessResponse(originalResp, req)
+		if err != nil {
+			t.Fatalf("ProcessResponse failed: %v", err)
+		}
+
+		// ブロックレスポンスが返されることを確認
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("Expected status code %d, got %d", http.StatusForbidden, resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("Failed to read response body: %v", err)
+		}
+
+		if string(body) != "This resource is blocked by test" {
+			t.Errorf("Unexpected response body: %q", string(body))
+		}
+	})
 }
 
 // TestMitmProxy_InspectTLSTraffic はMITMプロキシがTLS通信の内容を正しく傍受できているかを確認するテストです

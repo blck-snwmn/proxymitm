@@ -116,6 +116,13 @@ type ServerMux struct {
 	writeTimeout time.Duration
 	idleTimeout  time.Duration
 	logger       Logger
+	interceptors []HTTPInterceptor
+}
+
+// AddInterceptor はインターセプターを追加するメソッド
+func (mp *ServerMux) AddInterceptor(interceptor HTTPInterceptor) {
+	mp.interceptors = append(mp.interceptors, interceptor)
+	mp.logger.Info("Added interceptor: %T", interceptor)
 }
 
 func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -244,12 +251,37 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 		defer req.Body.Close()
 	}
 
+	var err error
+	skipRemaining := false
+
+	// リクエストインターセプト処理
+	for _, interceptor := range mp.interceptors {
+		mp.logger.Debug("Applying request interceptor: %T", interceptor)
+		if req, skipRemaining, err = interceptor.ProcessRequest(req); err != nil {
+			mp.logger.Error("Interceptor error during request processing: %v", err)
+			return NewProxyError(ErrSendRequest, "interceptor_request", "interceptor failed to process request", err)
+		}
+		if skipRemaining {
+			mp.logger.Debug("Request processing interrupted by interceptor: %T", interceptor)
+			break // 後続のインターセプターをスキップ
+		}
+	}
+
 	mp.logger.Debug("Sending request to %s", req.URL.String())
 	resp, err := mp.client.Do(req)
 	if err != nil {
 		return NewProxyError(ErrSendRequest, "do_request", "failed to send request", err)
 	}
 	defer resp.Body.Close()
+
+	// レスポンスインターセプト処理
+	for _, interceptor := range mp.interceptors {
+		mp.logger.Debug("Applying response interceptor: %T", interceptor)
+		if resp, err = interceptor.ProcessResponse(resp, req); err != nil {
+			mp.logger.Error("Interceptor error during response processing: %v", err)
+			return NewProxyError(ErrSendRequest, "interceptor_response", "interceptor failed to process response", err)
+		}
+	}
 
 	mp.logger.Debug("Writing response with status %d", resp.StatusCode)
 	writer := io.MultiWriter(conn, os.Stdout)
@@ -279,6 +311,7 @@ func New(certPath, keyPath string) (*http.Server, error) {
 		writeTimeout: DefaultWriteTimeout,
 		idleTimeout:  DefaultIdleTimeout,
 		logger:       NewDefaultLogger(LogLevelInfo),
+		interceptors: make([]HTTPInterceptor, 0),
 	}
 
 	server := http.Server{
@@ -323,6 +356,7 @@ func CreateMitmProxy(certPath, keyPath string) (*ServerMux, error) {
 		writeTimeout: DefaultWriteTimeout,
 		idleTimeout:  DefaultIdleTimeout,
 		logger:       NewDefaultLogger(LogLevelInfo),
+		interceptors: make([]HTTPInterceptor, 0),
 	}, nil
 }
 

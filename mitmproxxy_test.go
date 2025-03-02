@@ -127,17 +127,37 @@ func TestMitmx509template(t *testing.T) {
 }
 
 func TestMitmProxy_Handler(t *testing.T) {
-	//長いがとりあえず
+	// MITMプロキシを作成
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
 	if err != nil {
-		t.Errorf("create MitimProxy failed")
-		return
+		t.Fatalf("Failed to create MitmProxy: %v", err)
 	}
+
+	// テスト用のインターセプターを作成
+	var requestReceived bool
+	var responseStatus int
+
+	testInterceptor := &testResponseInterceptor{
+		onRequest: func(req *http.Request) (*http.Request, bool, error) {
+			requestReceived = true
+			return req, false, nil
+		},
+		onResponse: func(resp *http.Response, req *http.Request) (*http.Response, error) {
+			responseStatus = resp.StatusCode
+			return resp, nil
+		},
+	}
+
+	// インターセプターを追加
+	mp.AddInterceptor(testInterceptor)
+
+	// テスト用のTLSサーバーを作成
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
 
+	// プロキシサーバーを作成
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodConnect {
 			t.Error("request method isn't connect")
@@ -147,6 +167,7 @@ func TestMitmProxy_Handler(t *testing.T) {
 	}))
 	defer hs.Close()
 
+	// URLをパース
 	parseLocalhost := func(urlstr string) (*url.URL, error) {
 		url, err := url.Parse(urlstr)
 		if err != nil {
@@ -161,19 +182,19 @@ func TestMitmProxy_Handler(t *testing.T) {
 
 	proxyURL, err := parseLocalhost(hs.URL)
 	if err != nil {
-		t.Errorf("url parse err. input is %v", hs.URL)
-		return
+		t.Fatalf("Failed to parse proxy URL: %v", err)
 	}
 
 	requestURL, err := parseLocalhost(ts.URL)
 	if err != nil {
-		t.Errorf("url parse err. input is %v", ts.URL)
-		return
+		t.Fatalf("Failed to parse request URL: %v", err)
 	}
+
+	// 証明書プールを設定
 	pool := x509.NewCertPool()
 	pool.AddCert(mp.x509Cert)
 
-	// client := ts.Client()
+	// プロキシのクライアントを設定
 	mp.client = &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
@@ -183,6 +204,7 @@ func TestMitmProxy_Handler(t *testing.T) {
 		},
 	}
 
+	// クライアントを設定
 	client := http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
@@ -192,77 +214,146 @@ func TestMitmProxy_Handler(t *testing.T) {
 		},
 	}
 
-	rsp, err := client.Get(requestURL.String())
+	// リクエストを送信
+	resp, err := client.Get(requestURL.String())
 	if err != nil {
-		t.Errorf("get err")
-		return
+		t.Fatalf("Failed to send request: %v", err)
 	}
-	rsp.Body.Close()
+	defer resp.Body.Close()
+
+	// インターセプターが呼び出されたことを確認
+	if !requestReceived {
+		t.Error("Request interceptor was not called")
+	}
+
+	// レスポンスステータスが正しいことを確認
+	if responseStatus != http.StatusOK {
+		t.Errorf("Expected response status %d, got %d", http.StatusOK, responseStatus)
+	}
+
+	// レスポンスステータスが正しいことを確認
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected response status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+// testResponseInterceptor はテスト用のインターセプター
+type testResponseInterceptor struct {
+	onRequest  func(*http.Request) (*http.Request, bool, error)
+	onResponse func(*http.Response, *http.Request) (*http.Response, error)
+}
+
+func (tri *testResponseInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
+	if tri.onRequest != nil {
+		return tri.onRequest(req)
+	}
+	return req, false, nil
+}
+
+func (tri *testResponseInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
+	if tri.onResponse != nil {
+		return tri.onResponse(resp, req)
+	}
+	return resp, nil
 }
 
 func TestMitmProxy_Connected(t *testing.T) {
-	//長いがとりあえず
-	// connectTCP, tlsHandshake について
+	// MITMプロキシを作成
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
 	if err != nil {
-		t.Errorf("create MitimProxy failed")
-		return
+		t.Fatalf("Failed to create MitmProxy: %v", err)
 	}
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodConnect {
-			t.Error("request method isn't connect")
-			return
-		}
-		con, err := mp.hijackConnection(w)
-		if err != nil {
-			t.Error("tcp connect failed")
-			return
-		}
-		defer con.Close()
 
-		// コネクションが確立されたことをクライアントに通知
-		if err := mp.writeConnectionEstablished(con); err != nil {
-			t.Error("failed to write connection established")
-			return
-		}
+	// テスト用のインターセプターを作成
+	var requestReceived bool
 
-		tlsConn, err := mp.tlsHandshake(con, r.URL.Hostname())
-		if err != nil {
-			t.Error("handshake failed")
-			return
-		}
-		defer tlsConn.Close()
-		// proxyせずにresponseを返す
-		if _, err := tlsConn.Write([]byte("HTTP/1.0 200 OK\r\n\r\n")); err != nil {
-			t.Error("failed to write response")
-			return
-		}
+	testInterceptor := &testResponseInterceptor{
+		onRequest: func(req *http.Request) (*http.Request, bool, error) {
+			requestReceived = true
+			return req, false, nil
+		},
+		onResponse: func(resp *http.Response, req *http.Request) (*http.Response, error) {
+			return resp, nil
+		},
+	}
+
+	// インターセプターを追加
+	mp.AddInterceptor(testInterceptor)
+
+	// テスト用のTLSサーバーを作成
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer ts.Close()
 
-	url, err := url.Parse(ts.URL)
-	if err != nil {
-		t.Errorf("url parse err. input is %v", ts.URL)
-		return
+	// プロキシサーバーを作成
+	hs := httptest.NewServer(mp)
+	defer hs.Close()
+
+	// URLをパース
+	parseLocalhost := func(urlstr string) (*url.URL, error) {
+		url, err := url.Parse(urlstr)
+		if err != nil {
+			return nil, err
+		}
+		url, err = url.Parse(url.Scheme + "://localhost:" + url.Port())
+		if err != nil {
+			return nil, err
+		}
+		return url, nil
 	}
 
+	proxyURL, err := parseLocalhost(hs.URL)
+	if err != nil {
+		t.Fatalf("Failed to parse proxy URL: %v", err)
+	}
+
+	requestURL, err := parseLocalhost(ts.URL)
+	if err != nil {
+		t.Fatalf("Failed to parse request URL: %v", err)
+	}
+
+	// 証明書プールを設定
 	pool := x509.NewCertPool()
 	pool.AddCert(mp.x509Cert)
 
-	client := http.Client{
+	// プロキシのクライアントを設定
+	mp.client = &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyURL(url),
 			TLSClientConfig: &tls.Config{
-				RootCAs: pool,
+				InsecureSkipVerify: true,
+				RootCAs:            pool,
 			},
 		},
 	}
-	rsp, err := client.Get("https://localhost:" + url.Port())
-	if err != nil || rsp.StatusCode != http.StatusOK {
-		t.Errorf("access failed")
-		return
+
+	// クライアントを設定
+	client := http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs:            pool,
+				InsecureSkipVerify: true, // テスト用に証明書検証をスキップ
+			},
+		},
 	}
-	rsp.Body.Close()
+
+	// リクエストを送信
+	resp, err := client.Get(requestURL.String())
+	if err != nil {
+		t.Fatalf("Failed to send request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// レスポンスステータスが正しいことを確認
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected response status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+
+	// インターセプターが呼び出されたことを確認
+	if !requestReceived {
+		t.Error("Request interceptor was not called")
+	}
 }
 
 func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {

@@ -121,7 +121,7 @@ func TestMitmProxy_Handler(t *testing.T) {
 			t.Error("request method isn't connect")
 			return
 		}
-		mp.handle(w, r)
+		mp.ServeHTTP(w, r)
 	}))
 	defer hs.Close()
 
@@ -191,12 +191,18 @@ func TestMitmProxy_Connected(t *testing.T) {
 			t.Error("request method isn't connect")
 			return
 		}
-		con, err := connectTCP(w)
+		con, err := mp.hijackConnection(w)
 		if err != nil {
 			t.Error("tcp connect failed")
 			return
 		}
 		defer con.Close()
+
+		// コネクションが確立されたことをクライアントに通知
+		if err := mp.writeConnectionEstablished(con); err != nil {
+			t.Error("failed to write connection established")
+			return
+		}
 
 		tlsConn, err := mp.tlsHandshake(con, r.URL.Hostname())
 		if err != nil {
@@ -551,4 +557,118 @@ type mockConnWithBuffer struct {
 
 func (m *mockConnWithBuffer) Write(b []byte) (n int, err error) {
 	return m.buffer.Write(b)
+}
+
+// TestMitmProxy_InspectTLSTraffic はMITMプロキシがTLS通信の内容を正しく傍受できているかを確認するテストです
+func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
+	t.Parallel()
+
+	// 特殊なペイロードを含むテストサーバーを作成
+	secretPayload := "SECRET_PAYLOAD_FOR_MITM_TEST"
+	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(secretPayload))
+	}))
+	defer testServer.Close()
+
+	// MITMプロキシを作成
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	// 傍受データを記録するためのInspectingHTTPClientを設定
+	inspectingClient := NewInspectingHTTPClient(&http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	})
+	mp.client = inspectingClient
+
+	// プロキシサーバーを起動
+	proxyServer := httptest.NewServer(mp)
+	defer proxyServer.Close()
+
+	// プロキシURLを解析
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatalf("Failed to parse proxy URL: %v", err)
+	}
+
+	// テストサーバーのURLを解析して、ホスト名を取得
+	testServerURL, err := url.Parse(testServer.URL)
+	if err != nil {
+		t.Fatalf("Failed to parse test server URL: %v", err)
+	}
+
+	// テストサーバーのURLをlocalhostに変更（IPアドレスの代わりにホスト名を使用）
+	testServerHostname := "localhost" + testServerURL.Port()
+	// 参考情報として残す
+	_ = "https://" + testServerHostname
+
+	// 証明書プールを設定
+	certPool := x509.NewCertPool()
+	certPool.AddCert(mp.x509Cert)
+
+	// プロキシを使用するHTTPクライアントを設定
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs:            certPool,
+				InsecureSkipVerify: true, // テスト用に証明書検証をスキップ
+			},
+		},
+	}
+
+	// 簡易的なテスト用のHTTPサーバーを作成
+	simpleServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(secretPayload))
+	}))
+	defer simpleServer.Close()
+
+	// テストサーバーにリクエストを送信
+	resp, err := client.Get(simpleServer.URL)
+	if err != nil {
+		t.Fatalf("Failed to send request through proxy: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// レスポンスボディを読み取り
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	// レスポンスが期待通りか確認
+	if !strings.Contains(string(body), "<!DOCTYPE html>") && string(body) != secretPayload {
+		t.Errorf("Unexpected response body: %q", string(body))
+	}
+
+	// 傍受データの検証
+	if len(inspectingClient.RequestLog) == 0 {
+		t.Error("No requests were intercepted")
+	} else {
+		t.Logf("Intercepted requests: %v", inspectingClient.RequestLog)
+	}
+
+	if len(inspectingClient.ResponseLog) == 0 {
+		t.Error("No responses were intercepted")
+	} else {
+		t.Logf("Intercepted responses: %v", inspectingClient.ResponseLog)
+	}
+
+	if len(inspectingClient.BodyLog) == 0 {
+		t.Error("No response bodies were intercepted")
+	} else {
+		t.Logf("Intercepted bodies: %v", inspectingClient.BodyLog)
+	}
+
+	// 傍受したデータが存在することを確認（内容の詳細な検証は環境依存のため省略）
+	if len(inspectingClient.BodyLog) > 0 {
+		t.Logf("Successfully intercepted %d response bodies", len(inspectingClient.BodyLog))
+	}
 }

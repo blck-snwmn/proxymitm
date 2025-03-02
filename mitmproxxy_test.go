@@ -1,13 +1,16 @@
 package proxymitm
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -267,20 +270,20 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		method        string
-		url           string
-		expectedCode  int
+		name         string
+		method       string
+		url          string
+		expectedCode int
 	}{
 		{
-			name:          "Invalid Method",
-			method:        "INVALID",
+			name:         "Invalid Method",
+			method:       "INVALID",
 			url:          "http://example.com",
 			expectedCode: http.StatusInternalServerError,
 		},
 		{
-			name:          "Empty URL",
-			method:        http.MethodGet,
+			name:         "Empty URL",
+			method:       http.MethodGet,
 			url:          "http://",
 			expectedCode: http.StatusInternalServerError,
 		},
@@ -343,10 +346,209 @@ func (m *mockConn) Read(b []byte) (n int, err error) {
 }
 
 // Implement other required net.Conn interface methods
-func (m *mockConn) Write(b []byte) (n int, err error)             { return len(b), nil }
-func (m *mockConn) Close() error                                  { return nil }
-func (m *mockConn) LocalAddr() net.Addr                          { return nil }
-func (m *mockConn) RemoteAddr() net.Addr                         { return nil }
-func (m *mockConn) SetDeadline(t time.Time) error                { return nil }
-func (m *mockConn) SetReadDeadline(t time.Time) error            { return nil }
-func (m *mockConn) SetWriteDeadline(t time.Time) error           { return nil }
+func (m *mockConn) Write(b []byte) (n int, err error)  { return len(b), nil }
+func (m *mockConn) Close() error                       { return nil }
+func (m *mockConn) LocalAddr() net.Addr                { return nil }
+func (m *mockConn) RemoteAddr() net.Addr               { return nil }
+func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
+
+func TestServerMux_HijackConnection(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		setupWriter func() http.ResponseWriter
+		wantErr     bool
+		errType     ErrorType
+	}{
+		{
+			name: "successful hijack",
+			setupWriter: func() http.ResponseWriter {
+				return httptest.NewRecorder()
+			},
+			wantErr: true,
+			errType: ErrHijack,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w := tt.setupWriter()
+			_, err := mp.hijackConnection(w)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("hijackConnection() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				if proxyErr, ok := err.(*ProxyError); !ok || proxyErr.Type != tt.errType {
+					t.Errorf("hijackConnection() error type = %v, want %v", proxyErr.Type, tt.errType)
+				}
+			}
+		})
+	}
+}
+
+func TestServerMux_WriteConnectionEstablished(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		conn    net.Conn
+		wantErr bool
+	}{
+		{
+			name:    "successful write",
+			conn:    &mockConn{},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if err := mp.writeConnectionEstablished(tt.conn); (err != nil) != tt.wantErr {
+				t.Errorf("writeConnectionEstablished() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestServerMux_WriteResponse(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		resp     *http.Response
+		wantCode int
+		wantErr  bool
+	}{
+		{
+			name: "successful write",
+			resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("test body")),
+			},
+			wantCode: http.StatusOK,
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w := httptest.NewRecorder()
+			if err := mp.writeResponse(w, tt.resp); (err != nil) != tt.wantErr {
+				t.Errorf("writeResponse() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if w.Code != tt.wantCode {
+				t.Errorf("writeResponse() status code = %v, want %v", w.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestServerMux_ForwardRequest(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	if err != nil {
+		t.Fatalf("Failed to create MitmProxy: %v", err)
+	}
+
+	// Create a mock connection that can record written data
+	mockConn := &mockConnWithBuffer{
+		mockConn: mockConn{},
+		buffer:   &bytes.Buffer{},
+	}
+
+	// Create a mock response
+	mockResp := &http.Response{
+		Status:     "200 OK",
+		StatusCode: http.StatusOK,
+		Proto:      "HTTP/1.1",
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("test response")),
+	}
+
+	// Create a mock client
+	mockClient := &mockHTTPClient{
+		response: mockResp,
+		err:      nil,
+	}
+	mp.client = mockClient
+
+	tests := []struct {
+		name    string
+		setup   func() (*http.Request, net.Conn)
+		wantErr bool
+	}{
+		{
+			name: "successful forward",
+			setup: func() (*http.Request, net.Conn) {
+				req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
+				return req, mockConn
+			},
+			wantErr: false,
+		},
+		{
+			name: "client error",
+			setup: func() (*http.Request, net.Conn) {
+				req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
+				mockClient.response = nil
+				mockClient.err = errors.New("client error")
+				return req, mockConn
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			req, conn := tt.setup()
+			err := mp.forwardRequest(conn, req)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("forwardRequest() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// mockHTTPClient is a mock implementation of HTTPClient
+type mockHTTPClient struct {
+	response *http.Response
+	err      error
+}
+
+func (c *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	return c.response, c.err
+}
+
+// mockConnWithBuffer extends mockConn to record written data
+type mockConnWithBuffer struct {
+	mockConn
+	buffer *bytes.Buffer
+}
+
+func (m *mockConnWithBuffer) Write(b []byte) (n int, err error) {
+	return m.buffer.Write(b)
+}

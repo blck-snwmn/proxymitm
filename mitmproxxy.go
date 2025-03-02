@@ -26,74 +26,132 @@ var (
 
 var _ http.Handler = (*ServerMux)(nil)
 
+// HTTPClient is an interface for making HTTP requests
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
 type ServerMux struct {
 	tlsCert  tls.Certificate
 	x509Cert *x509.Certificate
-	client   *http.Client
+	client   HTTPClient
 }
 
 func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var newReq *http.Request
 	// TCP コネクションの確立
-	hjk, ok := w.(http.Hijacker)
-	if !ok {
-		proxyErr := NewProxyError(ErrHijack, "hijack", "http.Hijacker not available", nil)
+	con, err := mp.hijackConnection(w)
+	if err != nil {
+		proxyErr := err.(*ProxyError)
 		log.Printf("Error: %v", proxyErr)
 		http.Error(w, proxyErr.Message, http.StatusInternalServerError)
-		return
-	}
-	con, _, err := hjk.Hijack()
-	if err != nil {
-		proxyErr := NewProxyError(ErrHijack, "hijack", "failed to hijack connection", err)
-		log.Printf("Error: %v", proxyErr)
-		con.Write(internalServerError)
 		return
 	}
 	defer con.Close()
 
 	switch r.Method {
 	case http.MethodConnect:
-		//コネクションが張れたため、200 を返す
-		con.Write([]byte("HTTP/1.0 200 Connection established \r\n\r\n"))
-
-		// Client との TLS ハンドシェイク
-		con, err = mp.tlsHandshake(con, r.URL.Hostname())
-		if err != nil {
+		if err := mp.handleConnect(con, r); err != nil {
 			log.Printf("Error: %v", err)
 			con.Write(internalServerError)
-			return
-		}
-		defer con.Close()
-		// データのやりとり
-		// Clientのリクエストをサーバーへ送信
-		newReq, err = mp.createRequest(con)
-		if err != nil {
-			log.Printf("Error: %v", err)
-			con.Write(internalServerError)
-			return
 		}
 	default:
-		newReq, err = http.NewRequest(r.Method, r.URL.String(), r.Body)
-		if err != nil {
-			proxyErr := NewProxyError(ErrCreateRequest, "new_request", "failed to create request", err)
-			log.Printf("Error: %v", proxyErr)
-			http.Error(w, proxyErr.Message, http.StatusInternalServerError)
-			return
+		if err := mp.handleNonConnect(w, r); err != nil {
+			if proxyErr, ok := err.(*ProxyError); ok {
+				log.Printf("Error: %v", proxyErr)
+				http.Error(w, proxyErr.Message, http.StatusInternalServerError)
+			} else {
+				log.Printf("Error: %v", err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
 		}
 	}
+}
 
-	newReq = newReq.WithContext(r.Context())
-	resp, err := mp.client.Do(newReq)
+func (mp *ServerMux) hijackConnection(w http.ResponseWriter) (net.Conn, error) {
+	hjk, ok := w.(http.Hijacker)
+	if !ok {
+		return nil, NewProxyError(ErrHijack, "hijack", "http.Hijacker not available", nil)
+	}
+	con, _, err := hjk.Hijack()
 	if err != nil {
-		proxyErr := NewProxyError(ErrSendRequest, "do_request", "failed to send request", err)
-		log.Printf("Error: %v", proxyErr)
-		http.Error(w, proxyErr.Message, http.StatusInternalServerError)
-		return
+		return nil, NewProxyError(ErrHijack, "hijack", "failed to hijack connection", err)
+	}
+	return con, nil
+}
+
+func (mp *ServerMux) handleConnect(con net.Conn, r *http.Request) error {
+	if err := mp.writeConnectionEstablished(con); err != nil {
+		return err
+	}
+
+	// Client との TLS ハンドシェイク
+	tlsConn, err := mp.tlsHandshake(con, r.URL.Hostname())
+	if err != nil {
+		return err
+	}
+	defer tlsConn.Close()
+
+	// データのやりとり
+	// Clientのリクエストをサーバーへ送信
+	req, err := mp.createRequest(tlsConn)
+	if err != nil {
+		return err
+	}
+
+	return mp.forwardRequest(tlsConn, req.WithContext(r.Context()))
+}
+
+func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) error {
+	req, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+	if err != nil {
+		return NewProxyError(ErrCreateRequest, "new_request", "failed to create request", err)
+	}
+	req = req.WithContext(r.Context())
+
+	resp, err := mp.client.Do(req)
+	if err != nil {
+		return NewProxyError(ErrSendRequest, "do_request", "failed to send request", err)
 	}
 	defer resp.Body.Close()
 
-	writer := io.MultiWriter(con, os.Stdout)
-	resp.Write(writer)
+	return mp.writeResponse(w, resp)
+}
+
+func (mp *ServerMux) writeConnectionEstablished(con net.Conn) error {
+	_, err := con.Write([]byte("HTTP/1.0 200 Connection established \r\n\r\n"))
+	if err != nil {
+		return NewProxyError(ErrHijack, "write", "failed to write connection established", err)
+	}
+	return nil
+}
+
+func (mp *ServerMux) writeResponse(w http.ResponseWriter, resp *http.Response) error {
+	// Copy headers
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(resp.StatusCode)
+
+	// Copy body
+	_, err := io.Copy(w, resp.Body)
+	if err != nil {
+		return NewProxyError(ErrSendRequest, "write_response", "failed to write response", err)
+	}
+	return nil
+}
+
+func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
+	resp, err := mp.client.Do(req)
+	if err != nil {
+		return NewProxyError(ErrSendRequest, "do_request", "failed to send request", err)
+	}
+	defer resp.Body.Close()
+
+	writer := io.MultiWriter(conn, os.Stdout)
+	if err := resp.Write(writer); err != nil {
+		return NewProxyError(ErrSendRequest, "write_response", "failed to write response", err)
+	}
+	return nil
 }
 
 func New(certPath, keyPath string) (*http.Server, error) {

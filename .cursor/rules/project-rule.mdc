@@ -1,0 +1,13 @@
+---
+description: 
+globs: *.go
+alwaysApply: false
+---
+
+# Test & Lint
+If you have made any changes to the file, please run the test and Lint and fix any problems you find.
+
+Lint 
+```
+go tool golangci-lint run
+```

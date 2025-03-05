@@ -1,6 +1,9 @@
 package proxymitm
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // ErrorType はプロキシエラーの種別を表す型です
 type ErrorType string
@@ -39,6 +42,16 @@ func (e *ProxyError) Unwrap() error {
 	return e.Err
 }
 
+// Is はerrors.Isで使用するためのメソッドです
+// 同じエラータイプを持つProxyErrorと比較できるようにします
+func (e *ProxyError) Is(target error) bool {
+	t, ok := target.(*ProxyError)
+	if !ok {
+		return false
+	}
+	return e.Type == t.Type
+}
+
 // NewProxyError は新しいProxyErrorを作成します
 func NewProxyError(typ ErrorType, op string, message string, err error) *ProxyError {
 	return &ProxyError{
@@ -47,4 +60,20 @@ func NewProxyError(typ ErrorType, op string, message string, err error) *ProxyEr
 		Message: message,
 		Err:     err,
 	}
+}
+
+// IsErrorType は指定されたエラーが特定のErrorTypeを持つProxyErrorかどうかを判定します
+func IsErrorType(err error, typ ErrorType) bool {
+	target := &ProxyError{Type: typ}
+	return errors.Is(err, target)
+}
+
+// GetProxyError はエラーからProxyErrorを取得します
+// ProxyErrorでない場合はnilを返します
+func GetProxyError(err error) *ProxyError {
+	var proxyErr *ProxyError
+	if errors.As(err, &proxyErr) {
+		return proxyErr
+	}
+	return nil
 }

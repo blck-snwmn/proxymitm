@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io"
 	"log"
 	"math/big"
@@ -424,7 +425,8 @@ func (mp *ServerMux) CreateRequest(conn net.Conn) (*http.Request, error) {
 
 // handleError は統一されたエラーハンドリングを提供します
 func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
-	if proxyErr, ok := err.(*ProxyError); ok {
+	var proxyErr *ProxyError
+	if errors.As(err, &proxyErr) {
 		mp.logger.Error("Proxy error: %v", proxyErr)
 		http.Error(w, proxyErr.Message, http.StatusInternalServerError)
 	} else {
@@ -435,7 +437,12 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 
 // handleConnectError はCONNECTメソッドのエラーハンドリングを提供します
 func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
-	mp.logger.Error("Connect error: %v", err)
+	var proxyErr *ProxyError
+	if errors.As(err, &proxyErr) {
+		mp.logger.Error("Connect error: %v", proxyErr)
+	} else {
+		mp.logger.Error("Connect error: %v", err)
+	}
 	if _, writeErr := con.Write(internalServerError); writeErr != nil {
 		mp.logger.Error("Failed to write error response: %v", writeErr)
 	}

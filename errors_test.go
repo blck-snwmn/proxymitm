@@ -2,8 +2,9 @@ package proxymitm
 
 import (
 	"errors"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestProxyError_Error(t *testing.T) {
@@ -41,11 +42,14 @@ func TestProxyError_Error(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tt.err.Error(); got != tt.want {
-				t.Errorf("ProxyError.Error() = %v, want %v", got, tt.want)
-			}
-			if got := tt.err.Unwrap(); (got != nil && tt.wantErr == nil) || (got == nil && tt.wantErr != nil) {
-				t.Errorf("ProxyError.Unwrap() = %v, want %v", got, tt.wantErr)
+			assert.Equal(t, tt.want, tt.err.Error(), "ProxyError.Error() should match expected value")
+
+			got := tt.err.Unwrap()
+			if tt.wantErr == nil {
+				assert.Nil(t, got, "ProxyError.Unwrap() should be nil")
+			} else {
+				assert.NotNil(t, got, "ProxyError.Unwrap() should not be nil")
+				assert.Equal(t, tt.wantErr.Error(), got.Error(), "Unwrapped error message should match")
 			}
 		})
 	}
@@ -56,21 +60,13 @@ func TestNewProxyError(t *testing.T) {
 	originalErr := errors.New("test error")
 	err := NewProxyError(ErrHijack, "test_op", "test message", originalErr)
 
-	if err.Type != ErrHijack {
-		t.Errorf("NewProxyError().Type = %v, want %v", err.Type, ErrHijack)
-	}
-	if err.Op != "test_op" {
-		t.Errorf("NewProxyError().Op = %v, want %v", err.Op, "test_op")
-	}
-	if err.Message != "test message" {
-		t.Errorf("NewProxyError().Message = %v, want %v", err.Message, "test message")
-	}
-	if err.Err != originalErr {
-		t.Errorf("NewProxyError().Err = %v, want %v", err.Err, originalErr)
-	}
+	assert.Equal(t, ErrHijack, err.Type, "NewProxyError().Type should match")
+	assert.Equal(t, "test_op", err.Op, "NewProxyError().Op should match")
+	assert.Equal(t, "test message", err.Message, "NewProxyError().Message should match")
+	assert.Equal(t, originalErr, err.Err, "NewProxyError().Err should match")
 
 	errStr := err.Error()
-	if !strings.Contains(errStr, string(ErrHijack)) || !strings.Contains(errStr, "test_op") || !strings.Contains(errStr, "test error") {
-		t.Errorf("NewProxyError().Error() = %v, want to contain type, op and error", errStr)
-	}
+	assert.Contains(t, errStr, string(ErrHijack), "Error string should contain error type")
+	assert.Contains(t, errStr, "test_op", "Error string should contain operation")
+	assert.Contains(t, errStr, "test error", "Error string should contain original error")
 }

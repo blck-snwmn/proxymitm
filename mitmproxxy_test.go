@@ -14,6 +14,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // testInterceptor はテスト用のHTTPインターセプター
@@ -40,32 +43,18 @@ func (ti *testInterceptor) ProcessResponse(resp *http.Response, req *http.Reques
 func TestCreateMitmProxy(t *testing.T) {
 	t.Run("failed, because load no exist file", func(t *testing.T) {
 		_, err := CreateMitmProxy("", "")
-		if err == nil {
-			t.Error("no err. want error")
-			return
-		}
+		assert.Error(t, err, "Should return an error when files don't exist")
 	})
 	t.Run("failed, because load no pem file", func(t *testing.T) {
 		_, err := CreateMitmProxy("./testdata/a.cert", "./testdata/ca.key")
-		if err == nil {
-			t.Error("no err. want error")
-			return
-		}
+		assert.Error(t, err, "Should return an error when file is not a valid PEM")
 	})
 	t.Run("create success", func(t *testing.T) {
 		mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-		if err != nil {
-			t.Errorf("CreateMitmProxy() error = %v", err)
-			return
-		}
-		if len(mp.tlsCert.Certificate) == 0 {
-			t.Error("mp.tlsCert have no Certificate")
-			return
-		}
-		if mp.x509Cert == nil {
-			t.Error("mp.x509Cert have no Certificate")
-			return
-		}
+		require.NoError(t, err, "CreateMitmProxy() should not return an error")
+
+		assert.Greater(t, len(mp.tlsCert.Certificate), 0, "mp.tlsCert should have at least one Certificate")
+		assert.NotNil(t, mp.x509Cert, "mp.x509Cert should not be nil")
 	})
 }
 

@@ -7,6 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoggingInterceptor(t *testing.T) {
@@ -23,26 +26,17 @@ func TestLoggingInterceptor(t *testing.T) {
 		req.Header.Set("Content-Type", "text/plain")
 
 		modifiedReq, skip, err := interceptor.ProcessRequest(req)
-		if err != nil {
-			t.Fatalf("ProcessRequest failed: %v", err)
-		}
-		if skip {
-			t.Errorf("ProcessRequest returned skip=true, expected false")
-		}
+		require.NoError(t, err, "ProcessRequest should not return an error")
+		assert.False(t, skip, "ProcessRequest should not skip")
 
 		// リクエストが変更されていないことを確認
-		if modifiedReq.Method != req.Method || modifiedReq.URL.String() != req.URL.String() {
-			t.Errorf("ProcessRequest modified the request unexpectedly")
-		}
+		assert.Equal(t, req.Method, modifiedReq.Method, "Request method should not be modified")
+		assert.Equal(t, req.URL.String(), modifiedReq.URL.String(), "Request URL should not be modified")
 
 		// ボディが読み取り可能であることを確認
 		body, err := io.ReadAll(modifiedReq.Body)
-		if err != nil {
-			t.Fatalf("Failed to read request body: %v", err)
-		}
-		if string(body) != "test body" {
-			t.Errorf("Request body was modified, got %q, want %q", string(body), "test body")
-		}
+		require.NoError(t, err, "Should be able to read request body")
+		assert.Equal(t, "test body", string(body), "Request body should not be modified")
 	})
 
 	// レスポンス処理のテスト
@@ -58,23 +52,15 @@ func TestLoggingInterceptor(t *testing.T) {
 		resp.Header.Set("Content-Type", "text/plain")
 
 		modifiedResp, err := interceptor.ProcessResponse(resp, req)
-		if err != nil {
-			t.Fatalf("ProcessResponse failed: %v", err)
-		}
+		require.NoError(t, err, "ProcessResponse should not return an error")
 
 		// レスポンスが変更されていないことを確認
-		if modifiedResp.StatusCode != resp.StatusCode {
-			t.Errorf("ProcessResponse modified the response status code")
-		}
+		assert.Equal(t, resp.StatusCode, modifiedResp.StatusCode, "Response status code should not be modified")
 
 		// ボディが読み取り可能であることを確認
 		body, err := io.ReadAll(modifiedResp.Body)
-		if err != nil {
-			t.Fatalf("Failed to read response body: %v", err)
-		}
-		if string(body) != "response body" {
-			t.Errorf("Response body was modified, got %q, want %q", string(body), "response body")
-		}
+		require.NoError(t, err, "Should be able to read response body")
+		assert.Equal(t, "response body", string(body), "Response body should not be modified")
 	})
 }
 

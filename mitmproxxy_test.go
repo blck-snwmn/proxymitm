@@ -43,15 +43,15 @@ func (ti *testInterceptor) ProcessResponse(resp *http.Response, req *http.Reques
 }
 
 func TestCreateMitmProxy(t *testing.T) {
-	t.Run("failed, because load no exist file", func(t *testing.T) {
+	t.Run("should return error when files do not exist", func(t *testing.T) {
 		_, err := CreateMitmProxy("", "")
 		assert.Error(t, err, "Should return an error when files don't exist")
 	})
-	t.Run("failed, because load no pem file", func(t *testing.T) {
+	t.Run("should return error when invalid pem file", func(t *testing.T) {
 		_, err := CreateMitmProxy("./testdata/a.cert", "./testdata/ca.key")
 		assert.Error(t, err, "Should return an error when file is not a valid PEM")
 	})
-	t.Run("create success", func(t *testing.T) {
+	t.Run("should create proxy successfully when valid cert and key", func(t *testing.T) {
 		mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
 		require.NoError(t, err, "CreateMitmProxy() should not return an error")
 
@@ -70,8 +70,8 @@ func Test_createX509Certificate(t *testing.T) {
 		// want    []byte
 		wantErr bool
 	}{
-		{name: "create cert localhost", args: args{hostName: "localhost"}, wantErr: false},
-		{name: "create cert other", args: args{hostName: "www.google.com"}, wantErr: false},
+		{name: "should create valid certificate when hostname is localhost", args: args{hostName: "localhost"}, wantErr: false},
+		{name: "should create valid certificate when hostname is external", args: args{hostName: "www.google.com"}, wantErr: false},
 	}
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
 	require.NoError(t, err, "Should be able to create MitmProxy")
@@ -336,7 +336,7 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 	defer targetServer.Close()
 
 	// Test directly the handleNonConnect method with various inputs
-	t.Run("successful non-connect request", func(t *testing.T) {
+	t.Run("should proxy request successfully when valid request", func(t *testing.T) {
 		// Test with a valid URL - direct method call
 		req := httptest.NewRequest(http.MethodGet, targetServer.URL+"/test", nil)
 		w := httptest.NewRecorder()
@@ -363,7 +363,7 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 		assert.Equal(t, "text/plain", w.Header().Get("Content-Type"), "Content-Type header should be set")
 	})
 
-	t.Run("error creating request", func(t *testing.T) {
+	t.Run("should return error when request creation fails", func(t *testing.T) {
 		// Invalid URL that will cause an error in http.NewRequest
 		req := &http.Request{
 			Method: http.MethodGet,
@@ -385,7 +385,7 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 		assert.Equal(t, ErrSendRequest, proxyErr.Type, "Error type should be ErrSendRequest")
 	})
 
-	t.Run("error during client.Do", func(t *testing.T) {
+	t.Run("should return error when client request fails", func(t *testing.T) {
 		// Test with client.Do returning an error
 		req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
 		w := httptest.NewRecorder()

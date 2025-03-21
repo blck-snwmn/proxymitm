@@ -20,7 +20,7 @@ func TestLoggingInterceptor(t *testing.T) {
 	interceptor := NewLoggingInterceptor(logger)
 
 	// Test request processing
-	t.Run("ProcessRequest", func(t *testing.T) {
+	t.Run("should not modify request when processing", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/test", strings.NewReader("test body"))
 		req.Header.Set("Content-Type", "text/plain")
@@ -40,7 +40,7 @@ func TestLoggingInterceptor(t *testing.T) {
 	})
 
 	// Test response processing
-	t.Run("ProcessResponse", func(t *testing.T) {
+	t.Run("should not modify response when processing", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
 		resp := &http.Response{
@@ -83,7 +83,7 @@ func TestContentModifierInterceptor(t *testing.T) {
 	interceptor.AddBodyReplacement("original", "replaced")
 
 	// Test request processing
-	t.Run("ProcessRequest", func(t *testing.T) {
+	t.Run("should modify request headers when processing", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
 		req.Header.Set("User-Agent", "Original/1.0")
@@ -98,7 +98,7 @@ func TestContentModifierInterceptor(t *testing.T) {
 	})
 
 	// Test response processing
-	t.Run("ProcessResponse", func(t *testing.T) {
+	t.Run("should modify response headers and body when processing", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
 		resp := &http.Response{
@@ -147,7 +147,7 @@ func TestFilteringInterceptor(t *testing.T) {
 	interceptor.SetBlockResponse(http.StatusForbidden, "403 Forbidden", "This resource is blocked")
 
 	// Test allowed request processing
-	t.Run("ProcessRequest_Allowed", func(t *testing.T) {
+	t.Run("should allow request when no blocklist rules match", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/allowed", nil)
 		req.Header.Set("User-Agent", "AllowedAgent")
@@ -159,7 +159,7 @@ func TestFilteringInterceptor(t *testing.T) {
 	})
 
 	// Test blocked host name processing
-	t.Run("ProcessRequest_BlockedHost", func(t *testing.T) {
+	t.Run("should block request when hostname is blocked", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://blocked.example.com/test", nil)
 
@@ -192,7 +192,7 @@ func TestFilteringInterceptor(t *testing.T) {
 	})
 
 	// Test blocked path processing
-	t.Run("ProcessRequest_BlockedPath", func(t *testing.T) {
+	t.Run("should block request when path is blocked", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/blocked/resource", nil)
 
@@ -202,7 +202,7 @@ func TestFilteringInterceptor(t *testing.T) {
 	})
 
 	// Test blocked user agent processing
-	t.Run("ProcessRequest_BlockedUserAgent", func(t *testing.T) {
+	t.Run("should block request when user agent is blocked", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
 		req.Header.Set("User-Agent", "BlockedAgent/1.0")
@@ -221,7 +221,7 @@ func TestRequestIDInterceptor(t *testing.T) {
 	interceptor := NewRequestIDInterceptor(logger)
 
 	// Test request processing
-	t.Run("ProcessRequest", func(t *testing.T) {
+	t.Run("should add request id header when processing request", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
 
@@ -239,7 +239,7 @@ func TestRequestIDInterceptor(t *testing.T) {
 	})
 
 	// Test response processing
-	t.Run("ProcessResponse", func(t *testing.T) {
+	t.Run("should add request id header when processing response", func(t *testing.T) {
 		t.Parallel()
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
 
@@ -266,7 +266,7 @@ func TestRequestIDInterceptor(t *testing.T) {
 	})
 
 	// Verify IDs are unique across multiple requests
-	t.Run("UniqueIDs", func(t *testing.T) {
+	t.Run("should generate unique ids for different requests", func(t *testing.T) {
 		t.Parallel()
 		req1 := httptest.NewRequest(http.MethodGet, "https://example.com/test1", nil)
 		req2 := httptest.NewRequest(http.MethodGet, "https://example.com/test2", nil)

@@ -17,7 +17,7 @@ func main() {
 	)
 	flag.Parse()
 
-	// ログレベルの設定
+	// Set log level
 	var level proxymitm.LogLevel
 	switch *logLevel {
 	case "debug":
@@ -33,35 +33,35 @@ func main() {
 	}
 	logger := proxymitm.NewDefaultLogger(level)
 
-	// MITMプロキシの作成
+	// Create MITM proxy
 	mp, err := proxymitm.CreateMitmProxy(*certPath, *keyPath)
 	if err != nil {
 		log.Fatalf("Failed to create MITM proxy: %v", err)
 	}
 
-	// ロギングインターセプターの追加
+	// Add logging interceptor
 	loggingInterceptor := proxymitm.NewLoggingInterceptor(logger)
 	mp.AddInterceptor(loggingInterceptor)
 
-	// コンテンツ変更インターセプターの追加
+	// Add content modifier interceptor
 	contentModifier := proxymitm.NewContentModifierInterceptor(logger)
 	contentModifier.AddRequestHeaderModification("User-Agent", "MITM-Proxy/1.0")
 	contentModifier.AddResponseHeaderModification("X-Proxied-By", "MITM-Proxy")
 	contentModifier.AddBodyReplacement("<title>", "<title>Modified by MITM-Proxy - ")
 	mp.AddInterceptor(contentModifier)
 
-	// フィルタリングインターセプターの追加
+	// Add filtering interceptor
 	filteringInterceptor := proxymitm.NewFilteringInterceptor(logger)
 	filteringInterceptor.AddBlockedHost("ads.example.com")
 	filteringInterceptor.AddBlockedPath("/ads/")
 	filteringInterceptor.SetBlockResponse(http.StatusForbidden, "403 Forbidden", "This content is blocked by MITM-Proxy")
 	mp.AddInterceptor(filteringInterceptor)
 
-	// リクエストIDインターセプターの追加
+	// Add request ID interceptor
 	requestIDInterceptor := proxymitm.NewRequestIDInterceptor(logger)
 	mp.AddInterceptor(requestIDInterceptor)
 
-	// サーバーの起動
+	// Start the server
 	log.Printf("Starting MITM proxy on %s", *addr)
 	log.Printf("Using CA certificate: %s", *certPath)
 	log.Printf("Using CA private key: %s", *keyPath)

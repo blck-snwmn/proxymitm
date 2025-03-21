@@ -5,31 +5,31 @@ import (
 	"fmt"
 )
 
-// ErrorType はプロキシエラーの種別を表す型です
+// ErrorType represents the type of proxy error
 type ErrorType string
 
 const (
-	// ErrHijack はHTTP接続のハイジャックに失敗した場合のエラーです
+	// ErrHijack is an error that occurs when HTTP connection hijacking fails
 	ErrHijack ErrorType = "hijack"
-	// ErrTLSHandshake はTLSハンドシェイクに失敗した場合のエラーです
+	// ErrTLSHandshake is an error that occurs when TLS handshake fails
 	ErrTLSHandshake ErrorType = "tls_handshake"
-	// ErrCreateRequest はリクエストの作成に失敗した場合のエラーです
+	// ErrCreateRequest is an error that occurs when request creation fails
 	ErrCreateRequest ErrorType = "create_request"
-	// ErrSendRequest はリクエストの送信に失敗した場合のエラーです
+	// ErrSendRequest is an error that occurs when request sending fails
 	ErrSendRequest ErrorType = "send_request"
-	// ErrCertificate は証明書関連の処理に失敗した場合のエラーです
+	// ErrCertificate is an error that occurs when certificate-related processing fails
 	ErrCertificate ErrorType = "certificate"
 )
 
-// ProxyError はプロキシ処理中のエラーを表す型です
+// ProxyError represents an error that occurs during proxy processing
 type ProxyError struct {
-	Type    ErrorType // エラーの種別
-	Op      string    // エラーが発生した操作
-	Message string    // エラーメッセージ
-	Err     error     // 元のエラー
+	Type    ErrorType // Type of error
+	Op      string    // Operation where the error occurred
+	Message string    // Error message
+	Err     error     // Original error
 }
 
-// Error はerrorインターフェースを実装します
+// Error implements the error interface
 func (e *ProxyError) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("%s: %s: %v", e.Type, e.Op, e.Err)
@@ -37,13 +37,13 @@ func (e *ProxyError) Error() string {
 	return fmt.Sprintf("%s: %s: %s", e.Type, e.Op, e.Message)
 }
 
-// Unwrap は元のエラーを返します
+// Unwrap returns the original error
 func (e *ProxyError) Unwrap() error {
 	return e.Err
 }
 
-// Is はerrors.Isで使用するためのメソッドです
-// 同じエラータイプを持つProxyErrorと比較できるようにします
+// Is is a method used for errors.Is
+// It allows comparison with ProxyErrors that have the same error type
 func (e *ProxyError) Is(target error) bool {
 	t, ok := target.(*ProxyError)
 	if !ok {
@@ -52,7 +52,7 @@ func (e *ProxyError) Is(target error) bool {
 	return e.Type == t.Type
 }
 
-// NewProxyError は新しいProxyErrorを作成します
+// NewProxyError creates a new ProxyError
 func NewProxyError(typ ErrorType, op string, message string, err error) *ProxyError {
 	return &ProxyError{
 		Type:    typ,
@@ -62,14 +62,14 @@ func NewProxyError(typ ErrorType, op string, message string, err error) *ProxyEr
 	}
 }
 
-// IsErrorType は指定されたエラーが特定のErrorTypeを持つProxyErrorかどうかを判定します
+// IsErrorType determines if the specified error is a ProxyError with a specific ErrorType
 func IsErrorType(err error, typ ErrorType) bool {
 	target := &ProxyError{Type: typ}
 	return errors.Is(err, target)
 }
 
-// GetProxyError はエラーからProxyErrorを取得します
-// ProxyErrorでない場合はnilを返します
+// GetProxyError retrieves a ProxyError from an error
+// Returns nil if not a ProxyError
 func GetProxyError(err error) *ProxyError {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {

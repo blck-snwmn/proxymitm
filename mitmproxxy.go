@@ -19,21 +19,21 @@ import (
 	"time"
 )
 
-// LogLevel はログレベルを表します
+// LogLevel represents the logging level
 type LogLevel int
 
 const (
-	// LogLevelDebug はデバッグレベルのログを表します
+	// LogLevelDebug represents the debug level log
 	LogLevelDebug LogLevel = iota
-	// LogLevelInfo は情報レベルのログを表します
+	// LogLevelInfo represents the information level log
 	LogLevelInfo
-	// LogLevelWarn は警告レベルのログを表します
+	// LogLevelWarn represents the warning level log
 	LogLevelWarn
-	// LogLevelError はエラーレベルのログを表します
+	// LogLevelError represents the error level log
 	LogLevelError
 )
 
-// Logger はロギングインターフェースを定義します
+// Logger defines the logging interface
 type Logger interface {
 	Debug(format string, v ...interface{})
 	Info(format string, v ...interface{})
@@ -41,40 +41,40 @@ type Logger interface {
 	Error(format string, v ...interface{})
 }
 
-// DefaultLogger はデフォルトのロガー実装です
+// DefaultLogger is the default logger implementation
 type DefaultLogger struct {
 	level LogLevel
 }
 
-// NewDefaultLogger は新しいデフォルトロガーを作成します
+// NewDefaultLogger creates a new default logger
 func NewDefaultLogger(level LogLevel) *DefaultLogger {
 	return &DefaultLogger{
 		level: level,
 	}
 }
 
-// Debug はデバッグレベルのログを出力します
+// Debug outputs logs at debug level
 func (l *DefaultLogger) Debug(format string, v ...interface{}) {
 	if l.level <= LogLevelDebug {
 		log.Printf("[DEBUG] "+format, v...)
 	}
 }
 
-// Info は情報レベルのログを出力します
+// Info outputs logs at information level
 func (l *DefaultLogger) Info(format string, v ...interface{}) {
 	if l.level <= LogLevelInfo {
 		log.Printf("[INFO] "+format, v...)
 	}
 }
 
-// Warn は警告レベルのログを出力します
+// Warn outputs logs at warning level
 func (l *DefaultLogger) Warn(format string, v ...interface{}) {
 	if l.level <= LogLevelWarn {
 		log.Printf("[WARN] "+format, v...)
 	}
 }
 
-// Error はエラーレベルのログを出力します
+// Error outputs logs at error level
 func (l *DefaultLogger) Error(format string, v ...interface{}) {
 	if l.level <= LogLevelError {
 		log.Printf("[ERROR] "+format, v...)
@@ -92,17 +92,17 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-// RequestCreator はリクエストを作成するためのインターフェースです
+// RequestCreator is an interface for creating requests
 type RequestCreator interface {
 	CreateRequest(conn net.Conn) (*http.Request, error)
 }
 
-// TLSHandshaker はTLSハンドシェイクを行うためのインターフェースです
+// TLSHandshaker is an interface for performing TLS handshakes
 type TLSHandshaker interface {
 	TLSHandshake(con net.Conn, hostName string) (*tls.Conn, error)
 }
 
-// デフォルトのタイムアウト値
+// Default timeout values
 const (
 	DefaultReadTimeout  = 30 * time.Second
 	DefaultWriteTimeout = 30 * time.Second
@@ -120,7 +120,7 @@ type ServerMux struct {
 	interceptors []HTTPInterceptor
 }
 
-// AddInterceptor はインターセプターを追加するメソッド
+// AddInterceptor adds an interceptor to the list
 func (mp *ServerMux) AddInterceptor(interceptor HTTPInterceptor) {
 	mp.interceptors = append(mp.interceptors, interceptor)
 	mp.logger.Info("Added interceptor: %T", interceptor)
@@ -129,7 +129,7 @@ func (mp *ServerMux) AddInterceptor(interceptor HTTPInterceptor) {
 func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mp.logger.Info("Received request: %s %s", r.Method, r.URL.String())
 
-	// TCP コネクションの確立
+	// Establish TCP connection
 	con, err := mp.hijackConnection(w)
 	if err != nil {
 		mp.handleError(w, err)
@@ -164,7 +164,7 @@ func (mp *ServerMux) hijackConnection(w http.ResponseWriter) (net.Conn, error) {
 }
 
 func (mp *ServerMux) handleConnect(con net.Conn, r *http.Request) error {
-	// コネクションのタイムアウト設定
+	// Set connection timeout
 	if err := con.SetDeadline(time.Now().Add(mp.readTimeout)); err != nil {
 		return NewProxyError(ErrHijack, "set_deadline", "failed to set connection deadline", err)
 	}
@@ -174,7 +174,7 @@ func (mp *ServerMux) handleConnect(con net.Conn, r *http.Request) error {
 		return err
 	}
 
-	// Client との TLS ハンドシェイク
+	// TLS handshake with client
 	mp.logger.Debug("Starting TLS handshake with %s", r.URL.Hostname())
 	tlsConn, err := mp.TLSHandshake(con, r.URL.Hostname())
 	if err != nil {
@@ -182,13 +182,13 @@ func (mp *ServerMux) handleConnect(con net.Conn, r *http.Request) error {
 	}
 	defer tlsConn.Close()
 
-	// TLSコネクションのタイムアウト設定
+	// Set TLS connection timeout
 	if err := tlsConn.SetDeadline(time.Now().Add(mp.readTimeout)); err != nil {
 		return NewProxyError(ErrTLSHandshake, "set_deadline", "failed to set TLS connection deadline", err)
 	}
 
-	// データのやりとり
-	// Clientのリクエストをサーバーへ送信
+	// Exchange data
+	// Send client request to server
 	mp.logger.Debug("Creating request from TLS connection")
 	req, err := mp.CreateRequest(tlsConn)
 	if err != nil {
@@ -207,7 +207,7 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 	}
 	req = req.WithContext(r.Context())
 
-	// リクエストボディがある場合は、必ず閉じるようにする
+	// Make sure to close the request body if it exists
 	if r.Body != nil {
 		defer r.Body.Close()
 	}
@@ -247,7 +247,7 @@ func (mp *ServerMux) writeResponse(w http.ResponseWriter, resp *http.Response) e
 }
 
 func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
-	// リクエストボディがある場合は、必ず閉じるようにする
+	// Make sure to close the request body if it exists
 	if req.Body != nil {
 		defer req.Body.Close()
 	}
@@ -255,7 +255,7 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 	var err error
 	skipRemaining := false
 
-	// リクエストインターセプト処理
+	// Request interception processing
 	for _, interceptor := range mp.interceptors {
 		mp.logger.Debug("Applying request interceptor: %T", interceptor)
 		if req, skipRemaining, err = interceptor.ProcessRequest(req); err != nil {
@@ -264,7 +264,7 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 		}
 		if skipRemaining {
 			mp.logger.Debug("Request processing interrupted by interceptor: %T", interceptor)
-			break // 後続のインターセプターをスキップ
+			break // Skip subsequent interceptors
 		}
 	}
 
@@ -275,7 +275,7 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 	}
 	defer resp.Body.Close()
 
-	// レスポンスインターセプト処理
+	// Response interception processing
 	for _, interceptor := range mp.interceptors {
 		mp.logger.Debug("Applying response interceptor: %T", interceptor)
 		if resp, err = interceptor.ProcessResponse(resp, req); err != nil {
@@ -293,12 +293,12 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 }
 
 func New(certPath, keyPath string) (*http.Server, error) {
-	// 自作の認証局の証明書の読み込み
+	// Load the certificate of the custom certificate authority
 	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return nil, NewProxyError(ErrCertificate, "load_cert", "failed to load certificate", err)
 	}
-	// 自作の認証局の証明書で署名された証明書を作成
+	// Create a certificate signed by the custom certificate authority
 	x509Cert, err := x509.ParseCertificate(tlsCert.Certificate[0])
 	if err != nil {
 		return nil, NewProxyError(ErrCertificate, "parse_cert", "failed to parse certificate", err)
@@ -339,12 +339,12 @@ func mitmx509template(hostName string) *x509.Certificate {
 
 // CreateMitmProxy load pem, and then it return MitmProxy
 func CreateMitmProxy(certPath, keyPath string) (*ServerMux, error) {
-	// 自作の認証局の証明書の読み込み
+	// Load the certificate of the custom certificate authority
 	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return nil, err
 	}
-	// 自作の認証局の証明書で署名された証明書を作成
+	// Create a certificate signed by the custom certificate authority
 	x509Cert, err := x509.ParseCertificate(tlsCert.Certificate[0])
 	if err != nil {
 		return nil, err
@@ -362,7 +362,7 @@ func CreateMitmProxy(certPath, keyPath string) (*ServerMux, error) {
 }
 
 func (mp *ServerMux) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
-	// 接続するドメインの証明書を作成する
+	// Create a certificate for the domain to connect to
 	template := mitmx509template(hostName)
 	c, pk, err := mp.createX509Certificate(template)
 	if err != nil {
@@ -418,12 +418,12 @@ func (mp *ServerMux) createRequest(tlsConn net.Conn) (*http.Request, error) {
 	return creq, nil
 }
 
-// CreateRequest はRequestCreatorインターフェースの実装です
+// CreateRequest implements the RequestCreator interface
 func (mp *ServerMux) CreateRequest(conn net.Conn) (*http.Request, error) {
 	return mp.createRequest(conn)
 }
 
-// handleError は統一されたエラーハンドリングを提供します
+// handleError provides unified error handling
 func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {
@@ -435,7 +435,7 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 	}
 }
 
-// handleConnectError はCONNECTメソッドのエラーハンドリングを提供します
+// handleConnectError provides error handling for the CONNECT method
 func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {
@@ -448,12 +448,12 @@ func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
 	}
 }
 
-// TLSHandshake はTLSHandshakerインターフェースの実装です
+// TLSHandshake implements the TLSHandshaker interface
 func (mp *ServerMux) TLSHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
 	return mp.tlsHandshake(con, hostName)
 }
 
-// InspectingHTTPClient はHTTPリクエストとレスポンスを記録するHTTPClientです
+// InspectingHTTPClient is an HTTPClient that records HTTP requests and responses
 type InspectingHTTPClient struct {
 	Client      HTTPClient
 	RequestLog  []string
@@ -461,7 +461,7 @@ type InspectingHTTPClient struct {
 	BodyLog     []string
 }
 
-// NewInspectingHTTPClient は新しいInspectingHTTPClientを作成します
+// NewInspectingHTTPClient creates a new InspectingHTTPClient
 func NewInspectingHTTPClient(client HTTPClient) *InspectingHTTPClient {
 	return &InspectingHTTPClient{
 		Client:      client,
@@ -471,21 +471,21 @@ func NewInspectingHTTPClient(client HTTPClient) *InspectingHTTPClient {
 	}
 }
 
-// Do はHTTPリクエストを実行し、リクエストとレスポンスを記録します
+// Do executes an HTTP request and records the request and response
 func (c *InspectingHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	// リクエストの内容を記録
+	// Record the request contents
 	c.RequestLog = append(c.RequestLog, req.Method+" "+req.URL.String())
 
-	// 元のクライアントでリクエストを実行
+	// Execute the request using the original client
 	resp, err := c.Client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 
-	// レスポンスの内容を記録
+	// Record the response contents
 	c.ResponseLog = append(c.ResponseLog, resp.Status)
 
-	// レスポンスボディを読み取り、記録
+	// Read and record the response body
 	if resp.Body != nil {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -493,10 +493,10 @@ func (c *InspectingHTTPClient) Do(req *http.Request) (*http.Response, error) {
 		}
 		resp.Body.Close()
 
-		// ボディを記録
+		// Record the body
 		c.BodyLog = append(c.BodyLog, string(body))
 
-		// ボディを再作成して返す
+		// Recreate the body and return it
 		resp.Body = io.NopCloser(bytes.NewBuffer(body))
 	}
 

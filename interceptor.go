@@ -9,25 +9,25 @@ import (
 	"sync"
 )
 
-// HTTPInterceptor はリクエストとレスポンスの両方を処理できる基本インターフェース
+// HTTPInterceptor is a basic interface that can process both requests and responses
 type HTTPInterceptor interface {
-	// リクエスト処理 - 変更されたリクエストを返す
-	// エラーを返すと処理が中断される
-	// trueを返すと後続のインターセプターがスキップされる（中断）
+	// Request processing - returns the modified request
+	// Returning an error will stop the processing
+	// Returning true will skip subsequent interceptors (termination)
 	ProcessRequest(*http.Request) (*http.Request, bool, error)
 
-	// レスポンス処理 - 変更されたレスポンスを返す
-	// 関連するリクエストにもアクセス可能
-	// エラーを返すと処理が中断される
+	// Response processing - returns the modified response
+	// Can also access the related request
+	// Returning an error will stop the processing
 	ProcessResponse(*http.Response, *http.Request) (*http.Response, error)
 }
 
-// LoggingInterceptor はリクエストとレスポンスの内容をログに記録するインターセプター
+// LoggingInterceptor is an interceptor that logs the contents of requests and responses
 type LoggingInterceptor struct {
 	logger Logger
 }
 
-// NewLoggingInterceptor は新しいLoggingInterceptorを作成します
+// NewLoggingInterceptor creates a new LoggingInterceptor
 func NewLoggingInterceptor(logger Logger) *LoggingInterceptor {
 	if logger == nil {
 		logger = NewDefaultLogger(LogLevelInfo)
@@ -37,16 +37,16 @@ func NewLoggingInterceptor(logger Logger) *LoggingInterceptor {
 	}
 }
 
-// ProcessRequest はリクエストの内容をログに記録します
+// ProcessRequest logs the contents of a request
 func (li *LoggingInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
 	li.logger.Info("Request: %s %s", req.Method, req.URL)
 
-	// ヘッダーの内容をログに記録
+	// Log header contents
 	for name, values := range req.Header {
 		li.logger.Debug("Request Header: %s: %s", name, strings.Join(values, ", "))
 	}
 
-	// リクエストボディがある場合は内容をログに記録
+	// Log request body contents if present
 	if req.Body != nil {
 		bodyBytes, err := io.ReadAll(req.Body)
 		if err != nil {
@@ -54,10 +54,10 @@ func (li *LoggingInterceptor) ProcessRequest(req *http.Request) (*http.Request, 
 			return req, false, err
 		}
 
-		// ボディを再設定
+		// Restore body
 		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-		// ボディの内容をログに記録（長すぎる場合は省略）
+		// Log body contents (truncated if too long)
 		if len(bodyBytes) > 1024 {
 			li.logger.Debug("Request Body (truncated): %s...", bodyBytes[:1024])
 		} else if len(bodyBytes) > 0 {
@@ -68,16 +68,16 @@ func (li *LoggingInterceptor) ProcessRequest(req *http.Request) (*http.Request, 
 	return req, false, nil
 }
 
-// ProcessResponse はレスポンスの内容をログに記録します
+// ProcessResponse logs the contents of a response
 func (li *LoggingInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
 	li.logger.Info("Response: %d %s for %s %s", resp.StatusCode, resp.Status, req.Method, req.URL)
 
-	// ヘッダーの内容をログに記録
+	// Log header contents
 	for name, values := range resp.Header {
 		li.logger.Debug("Response Header: %s: %s", name, strings.Join(values, ", "))
 	}
 
-	// レスポンスボディがある場合は内容をログに記録
+	// Log response body contents if present
 	if resp.Body != nil {
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -85,10 +85,10 @@ func (li *LoggingInterceptor) ProcessResponse(resp *http.Response, req *http.Req
 			return resp, err
 		}
 
-		// ボディを再設定
+		// Restore body
 		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-		// ボディの内容をログに記録（長すぎる場合は省略）
+		// Log body contents (truncated if too long)
 		if len(bodyBytes) > 1024 {
 			li.logger.Debug("Response Body (truncated): %s...", bodyBytes[:1024])
 		} else if len(bodyBytes) > 0 {
@@ -99,21 +99,21 @@ func (li *LoggingInterceptor) ProcessResponse(resp *http.Response, req *http.Req
 	return resp, nil
 }
 
-// ContentModifierInterceptor はリクエストとレスポンスの内容を変更するインターセプター
+// ContentModifierInterceptor is an interceptor that modifies the contents of requests and responses
 type ContentModifierInterceptor struct {
-	// リクエストヘッダーの変更マップ (key: ヘッダー名, value: 設定する値)
+	// Request header modification map (key: header name, value: value to set)
 	requestHeaderModifications map[string]string
 
-	// レスポンスヘッダーの変更マップ (key: ヘッダー名, value: 設定する値)
+	// Response header modification map (key: header name, value: value to set)
 	responseHeaderModifications map[string]string
 
-	// レスポンスボディの置換マップ (key: 検索文字列, value: 置換文字列)
+	// Response body replacement map (key: search string, value: replacement string)
 	bodyReplacements map[string]string
 
 	logger Logger
 }
 
-// NewContentModifierInterceptor は新しいContentModifierInterceptorを作成します
+// NewContentModifierInterceptor creates a new ContentModifierInterceptor
 func NewContentModifierInterceptor(logger Logger) *ContentModifierInterceptor {
 	if logger == nil {
 		logger = NewDefaultLogger(LogLevelInfo)
@@ -126,24 +126,24 @@ func NewContentModifierInterceptor(logger Logger) *ContentModifierInterceptor {
 	}
 }
 
-// AddRequestHeaderModification はリクエストヘッダーの変更を追加します
+// AddRequestHeaderModification adds a request header modification
 func (cmi *ContentModifierInterceptor) AddRequestHeaderModification(header, value string) {
 	cmi.requestHeaderModifications[header] = value
 }
 
-// AddResponseHeaderModification はレスポンスヘッダーの変更を追加します
+// AddResponseHeaderModification adds a response header modification
 func (cmi *ContentModifierInterceptor) AddResponseHeaderModification(header, value string) {
 	cmi.responseHeaderModifications[header] = value
 }
 
-// AddBodyReplacement はレスポンスボディの置換を追加します
+// AddBodyReplacement adds a response body replacement
 func (cmi *ContentModifierInterceptor) AddBodyReplacement(search, replace string) {
 	cmi.bodyReplacements[search] = replace
 }
 
-// ProcessRequest はリクエストの内容を変更します
+// ProcessRequest modifies the contents of a request
 func (cmi *ContentModifierInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
-	// ヘッダーの変更を適用
+	// Apply header modifications
 	for header, value := range cmi.requestHeaderModifications {
 		cmi.logger.Debug("Modifying request header: %s: %s", header, value)
 		req.Header.Set(header, value)
@@ -152,15 +152,15 @@ func (cmi *ContentModifierInterceptor) ProcessRequest(req *http.Request) (*http.
 	return req, false, nil
 }
 
-// ProcessResponse はレスポンスの内容を変更します
+// ProcessResponse modifies the contents of a response
 func (cmi *ContentModifierInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
-	// ヘッダーの変更を適用
+	// Apply header modifications
 	for header, value := range cmi.responseHeaderModifications {
 		cmi.logger.Debug("Modifying response header: %s: %s", header, value)
 		resp.Header.Set(header, value)
 	}
 
-	// ボディの置換が設定されている場合のみ処理
+	// Process only if body replacements are set
 	if len(cmi.bodyReplacements) > 0 && resp.Body != nil {
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -169,11 +169,11 @@ func (cmi *ContentModifierInterceptor) ProcessResponse(resp *http.Response, req 
 		}
 		resp.Body.Close()
 
-		// ボディの内容を文字列に変換
+		// Convert body content to string
 		bodyStr := string(bodyBytes)
 		modified := false
 
-		// 置換を適用
+		// Apply replacements
 		for search, replace := range cmi.bodyReplacements {
 			if strings.Contains(bodyStr, search) {
 				cmi.logger.Debug("Replacing '%s' with '%s' in response body", search, replace)
@@ -182,16 +182,16 @@ func (cmi *ContentModifierInterceptor) ProcessResponse(resp *http.Response, req 
 			}
 		}
 
-		// 変更があった場合のみ、新しいボディを設定
+		// Set new body only if modified
 		if modified {
 			newBodyBytes := []byte(bodyStr)
 			resp.Body = io.NopCloser(bytes.NewBuffer(newBodyBytes))
 
-			// Content-Lengthヘッダーを更新
+			// Update Content-Length header
 			resp.Header.Set("Content-Length", strconv.Itoa(len(newBodyBytes)))
 			cmi.logger.Info("Response body modified")
 		} else {
-			// 変更がなかった場合は元のボディを再設定
+			// Reset original body if not modified
 			resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 	}
@@ -199,18 +199,18 @@ func (cmi *ContentModifierInterceptor) ProcessResponse(resp *http.Response, req 
 	return resp, nil
 }
 
-// FilteringInterceptor はリクエストをフィルタリングするインターセプター
+// FilteringInterceptor is an interceptor that filters requests
 type FilteringInterceptor struct {
-	// ブロックするホスト名のリスト
+	// List of hosts to block
 	blockedHosts []string
 
-	// ブロックするURLパスのリスト
+	// List of URL paths to block
 	blockedPaths []string
 
-	// ブロックするユーザーエージェントのリスト
+	// List of User-Agents to block
 	blockedUserAgents []string
 
-	// ブロック時のカスタムレスポンス
+	// Custom response for blocked requests
 	blockResponseStatus  int
 	blockResponseMessage string
 	blockResponseBody    string
@@ -218,7 +218,7 @@ type FilteringInterceptor struct {
 	logger Logger
 }
 
-// NewFilteringInterceptor は新しいFilteringInterceptorを作成します
+// NewFilteringInterceptor creates a new FilteringInterceptor
 func NewFilteringInterceptor(logger Logger) *FilteringInterceptor {
 	if logger == nil {
 		logger = NewDefaultLogger(LogLevelInfo)
@@ -234,76 +234,76 @@ func NewFilteringInterceptor(logger Logger) *FilteringInterceptor {
 	}
 }
 
-// AddBlockedHost はブロックするホスト名を追加します
+// AddBlockedHost adds a hostname to block
 func (fi *FilteringInterceptor) AddBlockedHost(host string) {
 	fi.blockedHosts = append(fi.blockedHosts, host)
 }
 
-// AddBlockedPath はブロックするURLパスを追加します
+// AddBlockedPath adds a URL path to block
 func (fi *FilteringInterceptor) AddBlockedPath(path string) {
 	fi.blockedPaths = append(fi.blockedPaths, path)
 }
 
-// AddBlockedUserAgent はブロックするユーザーエージェントを追加します
+// AddBlockedUserAgent adds a user agent to block
 func (fi *FilteringInterceptor) AddBlockedUserAgent(userAgent string) {
 	fi.blockedUserAgents = append(fi.blockedUserAgents, userAgent)
 }
 
-// SetBlockResponse はブロック時のカスタムレスポンスを設定します
+// SetBlockResponse is used to set a custom response for blocked requests
 func (fi *FilteringInterceptor) SetBlockResponse(status int, message, body string) {
 	fi.blockResponseStatus = status
 	fi.blockResponseMessage = message
 	fi.blockResponseBody = body
 }
 
-// ProcessRequest はリクエストをフィルタリングします
+// ProcessRequest filters requests
 func (fi *FilteringInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
-	// ホスト名のフィルタリング
+	// Host filtering
 	for _, blockedHost := range fi.blockedHosts {
 		if strings.Contains(req.Host, blockedHost) {
 			fi.logger.Info("Blocked request to host: %s", req.Host)
-			return req, true, nil // 処理を中断
+			return req, true, nil // Stop processing
 		}
 	}
 
-	// URLパスのフィルタリング
+	// URL path filtering
 	for _, blockedPath := range fi.blockedPaths {
 		if strings.Contains(req.URL.Path, blockedPath) {
 			fi.logger.Info("Blocked request to path: %s", req.URL.Path)
-			return req, true, nil // 処理を中断
+			return req, true, nil // Stop processing
 		}
 	}
 
-	// ユーザーエージェントのフィルタリング
+	// User-Agent filtering
 	userAgent := req.Header.Get("User-Agent")
 	for _, blockedUserAgent := range fi.blockedUserAgents {
 		if strings.Contains(userAgent, blockedUserAgent) {
 			fi.logger.Info("Blocked request with User-Agent: %s", userAgent)
-			return req, true, nil // 処理を中断
+			return req, true, nil // Stop processing
 		}
 	}
 
 	return req, false, nil
 }
 
-// ProcessResponse はレスポンスを処理します
-// リクエスト処理でブロックされた場合、カスタムレスポンスを返します
+// ProcessResponse processes responses
+// Returns custom response if the request was blocked in request processing
 func (fi *FilteringInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
-	// ホスト名のフィルタリング
+	// Host filtering
 	for _, blockedHost := range fi.blockedHosts {
 		if strings.Contains(req.Host, blockedHost) {
 			return fi.createBlockResponse(req), nil
 		}
 	}
 
-	// URLパスのフィルタリング
+	// URL path filtering
 	for _, blockedPath := range fi.blockedPaths {
 		if strings.Contains(req.URL.Path, blockedPath) {
 			return fi.createBlockResponse(req), nil
 		}
 	}
 
-	// ユーザーエージェントのフィルタリング
+	// User-Agent filtering
 	userAgent := req.Header.Get("User-Agent")
 	for _, blockedUserAgent := range fi.blockedUserAgents {
 		if strings.Contains(userAgent, blockedUserAgent) {
@@ -314,7 +314,7 @@ func (fi *FilteringInterceptor) ProcessResponse(resp *http.Response, req *http.R
 	return resp, nil
 }
 
-// createBlockResponse はブロック時のカスタムレスポンスを作成します
+// Creates a custom response for blocked requests
 func (fi *FilteringInterceptor) createBlockResponse(req *http.Request) *http.Response {
 	resp := &http.Response{
 		StatusCode: fi.blockResponseStatus,
@@ -331,23 +331,23 @@ func (fi *FilteringInterceptor) createBlockResponse(req *http.Request) *http.Res
 	return resp
 }
 
-// RequestIDInterceptor はリクエストIDを生成して追跡するインターセプター
+// RequestIDInterceptor is an interceptor that generates and tracks request IDs
 type RequestIDInterceptor struct {
-	// リクエストとレスポンスの関連付けに使用するマップ
+	// Map used for associating requests and responses
 	requests  map[string]*http.Request
 	responses map[string]*http.Response
 	mutex     sync.Mutex
 
-	// リクエストIDのヘッダー名
+	// Header name for request ID
 	requestIDHeader string
 
-	// 次のリクエストID
+	// Next request ID
 	nextID int
 
 	logger Logger
 }
 
-// NewRequestIDInterceptor は新しいRequestIDInterceptorを作成します
+// NewRequestIDInterceptor creates a new RequestIDInterceptor
 func NewRequestIDInterceptor(logger Logger) *RequestIDInterceptor {
 	if logger == nil {
 		logger = NewDefaultLogger(LogLevelInfo)
@@ -361,15 +361,15 @@ func NewRequestIDInterceptor(logger Logger) *RequestIDInterceptor {
 	}
 }
 
-// ProcessRequest はリクエストにIDを付与します
+// ProcessRequest assigns an ID to a request
 func (ri *RequestIDInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
-	// リクエストIDを生成
+	// Generate request ID
 	id := ri.generateRequestID()
 
-	// リクエストIDをヘッダーに設定
+	// Set request ID in header
 	req.Header.Set(ri.requestIDHeader, id)
 
-	// リクエストを保存
+	// Store request
 	ri.mutex.Lock()
 	ri.requests[id] = req.Clone(req.Context())
 	ri.mutex.Unlock()
@@ -379,19 +379,19 @@ func (ri *RequestIDInterceptor) ProcessRequest(req *http.Request) (*http.Request
 	return req, false, nil
 }
 
-// ProcessResponse はレスポンスを処理し、リクエストIDを関連付けます
+// ProcessResponse processes responses and associates request IDs
 func (ri *RequestIDInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
-	// リクエストIDを取得
+	// Get request ID
 	id := req.Header.Get(ri.requestIDHeader)
 	if id == "" {
 		ri.logger.Warn("No request ID found in request: %s %s", req.Method, req.URL)
 		return resp, nil
 	}
 
-	// レスポンスヘッダーにリクエストIDを設定
+	// Set request ID in response header
 	resp.Header.Set(ri.requestIDHeader, id)
 
-	// レスポンスを保存
+	// Store response
 	ri.mutex.Lock()
 	ri.responses[id] = resp
 	ri.mutex.Unlock()
@@ -401,7 +401,7 @@ func (ri *RequestIDInterceptor) ProcessResponse(resp *http.Response, req *http.R
 	return resp, nil
 }
 
-// generateRequestID は一意のリクエストIDを生成します
+// Generates a unique request ID
 func (ri *RequestIDInterceptor) generateRequestID() string {
 	ri.mutex.Lock()
 	defer ri.mutex.Unlock()
@@ -411,7 +411,7 @@ func (ri *RequestIDInterceptor) generateRequestID() string {
 	return id
 }
 
-// GetRequestByID は指定されたIDのリクエストを取得します
+// Gets the request with the specified ID
 func (ri *RequestIDInterceptor) GetRequestByID(id string) *http.Request {
 	ri.mutex.Lock()
 	defer ri.mutex.Unlock()
@@ -419,7 +419,7 @@ func (ri *RequestIDInterceptor) GetRequestByID(id string) *http.Request {
 	return ri.requests[id]
 }
 
-// GetResponseByID は指定されたIDのレスポンスを取得します
+// Gets the response with the specified ID
 func (ri *RequestIDInterceptor) GetResponseByID(id string) *http.Response {
 	ri.mutex.Lock()
 	defer ri.mutex.Unlock()

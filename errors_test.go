@@ -79,13 +79,13 @@ func TestProxyError_Is(t *testing.T) {
 	err2 := NewProxyError(ErrHijack, "op2", "message2", nil)
 	err3 := NewProxyError(ErrTLSHandshake, "op3", "message3", nil)
 
-	// 同じTypeを持つエラーはIsでtrueを返す
+	// Errors with the same Type return true with Is
 	assert.True(t, errors.Is(err1, err2), "errors with same Type should match")
 
-	// 異なるTypeを持つエラーはIsでfalseを返す
+	// Errors with different Type return false with Is
 	assert.False(t, errors.Is(err1, err3), "errors with different Type should not match")
 
-	// ラップされたエラーでもIsで検出できる
+	// Wrapped errors can also be detected with Is
 	wrappedErr := fmt.Errorf("wrapped: %w", err1)
 	assert.True(t, errors.Is(wrappedErr, err2), "wrapped errors with same Type should match")
 }
@@ -109,17 +109,17 @@ func TestGetProxyError(t *testing.T) {
 	wrappedErr := fmt.Errorf("wrapped: %w", proxyErr)
 	plainErr := errors.New("plain error")
 
-	// ProxyErrorからProxyErrorを取得
+	// Get ProxyError from ProxyError
 	got1 := GetProxyError(proxyErr)
 	assert.NotNil(t, got1, "GetProxyError should return non-nil for ProxyError")
 	assert.Equal(t, ErrHijack, got1.Type, "GetProxyError should return correct Type")
 
-	// ラップされたエラーからProxyErrorを取得
+	// Get ProxyError from wrapped error
 	got2 := GetProxyError(wrappedErr)
 	assert.NotNil(t, got2, "GetProxyError should return non-nil for wrapped ProxyError")
 	assert.Equal(t, ErrHijack, got2.Type, "GetProxyError should return correct Type")
 
-	// 通常のエラーからはnilを返す
+	// Return nil from normal error
 	got3 := GetProxyError(plainErr)
 	assert.Nil(t, got3, "GetProxyError should return nil for non-ProxyError")
 }

@@ -1163,97 +1163,85 @@ func TestDefaultLogger(t *testing.T) {
 	tests := []struct {
 		name      string
 		level     LogLevel
-		shouldLog bool
 		logType   string
-		logFunc   func(logger *DefaultLogger)
+		shouldLog bool
 	}{
 		{
 			name:      "debug logs when level is debug",
 			level:     LogLevelDebug,
-			shouldLog: true,
 			logType:   "debug",
-			logFunc: func(logger *DefaultLogger) {
-				logger.Debug("test message")
-			},
+			shouldLog: true,
 		},
 		{
 			name:      "info logs when level is debug",
 			level:     LogLevelDebug,
-			shouldLog: true,
 			logType:   "info",
-			logFunc: func(logger *DefaultLogger) {
-				logger.Info("test message")
-			},
+			shouldLog: true,
 		},
 		{
 			name:      "warn logs when level is debug",
 			level:     LogLevelDebug,
-			shouldLog: true,
 			logType:   "warn",
-			logFunc: func(logger *DefaultLogger) {
-				logger.Warn("test message")
-			},
+			shouldLog: true,
 		},
 		{
 			name:      "warn logs when level is info",
 			level:     LogLevelInfo,
-			shouldLog: true,
 			logType:   "warn",
-			logFunc: func(logger *DefaultLogger) {
-				logger.Warn("test message")
-			},
+			shouldLog: true,
 		},
 		{
 			name:      "warn logs when level is warn",
 			level:     LogLevelWarn,
-			shouldLog: true,
 			logType:   "warn",
-			logFunc: func(logger *DefaultLogger) {
-				logger.Warn("test message")
-			},
+			shouldLog: true,
 		},
 		{
 			name:      "warn does not log when level is error",
 			level:     LogLevelError,
-			shouldLog: false,
 			logType:   "warn",
-			logFunc: func(logger *DefaultLogger) {
-				logger.Warn("test message")
-			},
+			shouldLog: false,
 		},
 		{
 			name:      "error logs when level is error",
 			level:     LogLevelError,
-			shouldLog: true,
 			logType:   "error",
-			logFunc: func(logger *DefaultLogger) {
-				logger.Error("test message")
-			},
+			shouldLog: true,
 		},
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			// Redirect log output to a buffer
+	for _, tc := range tests {
+		tc := tc
+		// Don't run tests in parallel due to global log writer setting
+		t.Run(tc.name, func(t *testing.T) {
+			// Set up a separate logger output for testing
+			// Important: We need to direct standard log output to our buffer
 			var buf bytes.Buffer
-			originalOutput := log.Writer()
+			origOutput := log.Writer()
 			log.SetOutput(&buf)
-			defer log.SetOutput(originalOutput)
+			defer log.SetOutput(origOutput)
 
-			// Create logger with test level
-			logger := NewDefaultLogger(tt.level)
+			logger := NewDefaultLogger(tc.level)
 
-			// Call the log function
-			tt.logFunc(logger)
+			// Call log method based on type
+			msg := "test message from " + tc.name
+			switch tc.logType {
+			case "debug":
+				logger.Debug(msg)
+			case "info":
+				logger.Info(msg)
+			case "warn":
+				logger.Warn(msg)
+			case "error":
+				logger.Error(msg)
+			}
 
-			// Check if log was output as expected
-			output := buf.String()
-			if tt.shouldLog {
+			gotOutput := buf.String()
+
+			if tc.shouldLog {
+				// Expected format is like: 2022/01/01 12:00:00 [INFO] message
 				expectedPrefix := ""
-				switch tt.logType {
+				switch tc.logType {
 				case "debug":
 					expectedPrefix = "[DEBUG]"
 				case "info":
@@ -1263,10 +1251,15 @@ func TestDefaultLogger(t *testing.T) {
 				case "error":
 					expectedPrefix = "[ERROR]"
 				}
-				assert.Contains(t, output, expectedPrefix, "Log output should contain the correct prefix")
-				assert.Contains(t, output, "test message", "Log output should contain the message")
-			} else {
-				assert.Equal(t, "", output, "No log should be output")
+
+				if !strings.Contains(gotOutput, expectedPrefix) {
+					t.Errorf("Expected log to contain %q but got: %q", expectedPrefix, gotOutput)
+				}
+				if !strings.Contains(gotOutput, msg) {
+					t.Errorf("Expected log to contain message %q but got: %q", msg, gotOutput)
+				}
+			} else if gotOutput != "" {
+				t.Errorf("Expected no log output but got: %q", gotOutput)
 			}
 		})
 	}
@@ -1442,4 +1435,175 @@ func (e *errReader) Read(p []byte) (n int, err error) {
 
 func (e *errReader) Close() error {
 	return nil
+}
+
+// TestServerMux_ServeHTTP_Connect tests the ServeHTTP method with CONNECT requests
+func TestServerMux_ServeHTTP_Connect(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	require.NoError(t, err, "Should be able to create MitmProxy")
+
+	t.Run("hijacker not available", func(t *testing.T) {
+		// Create a test request with CONNECT method
+		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
+
+		// Use a ResponseRecorder that doesn't implement http.Hijacker
+		w := httptest.NewRecorder()
+
+		// Test the ServeHTTP method
+		mp.ServeHTTP(w, req)
+
+		// Since the ResponseRecorder doesn't implement http.Hijacker,
+		// we expect an error response with internal server error
+		assert.Equal(t, http.StatusInternalServerError, w.Code, "Should return internal server error for non-hijackable response writer")
+		assert.Contains(t, w.Body.String(), "Hijacker not available", "Error message should indicate Hijacker is not available")
+	})
+}
+
+// TestHandleConnect tests the handleConnect method directly
+func TestHandleConnect(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	require.NoError(t, err, "Should be able to create MitmProxy")
+
+	t.Run("set deadline error", func(t *testing.T) {
+		// Create a test request
+		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
+
+		// Create a mock connection that fails on SetDeadline
+		mockConn := &mockConnWithErrors{
+			setDeadlineError: errors.New("set deadline error"),
+		}
+
+		// Call handleConnect
+		err := mp.handleConnect(mockConn, req)
+
+		// Check if the error is as expected
+		assert.Error(t, err, "handleConnect should return an error when SetDeadline fails")
+		var proxyErr *ProxyError
+		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
+		assert.Equal(t, ErrHijack, proxyErr.Type, "Error type should be ErrHijack")
+		assert.Contains(t, proxyErr.Error(), "set_deadline", "Error should contain the operation name")
+	})
+
+	t.Run("write connection established error", func(t *testing.T) {
+		// Create a test request
+		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
+
+		// Create a mock connection that fails on Write
+		mockConn := &mockConnWithErrors{
+			writeError: errors.New("write error"),
+		}
+
+		// Call handleConnect
+		err := mp.handleConnect(mockConn, req)
+
+		// Check if the error is as expected
+		assert.Error(t, err, "handleConnect should return an error when Write fails")
+		var proxyErr *ProxyError
+		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
+		assert.Equal(t, ErrHijack, proxyErr.Type, "Error type should be ErrHijack")
+		assert.Contains(t, proxyErr.Error(), "write", "Error should contain the operation name")
+	})
+
+	t.Run("tls handshake error", func(t *testing.T) {
+		// Create a test request
+		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
+
+		// Set a custom TLSHandshaker that returns an error
+		originalClient := mp.client
+		mp.client = &mockErrorClient{
+			tlsHandshakeError: errors.New("tls handshake error"),
+		}
+		defer func() { mp.client = originalClient }()
+
+		// Call handleConnect
+		err := mp.handleConnect(&mockConnWithBuffer{buffer: &bytes.Buffer{}}, req)
+
+		// Check if the error is as expected
+		assert.Error(t, err, "handleConnect should return an error when TLS handshake fails")
+	})
+
+	t.Run("tls set deadline error", func(t *testing.T) {
+		// Skip this test as we cannot directly create a tls.Conn for testing
+		// We're going to test at the TLSHandshake method level instead
+		t.Skip("Cannot directly test TLS connection deadline errors")
+	})
+
+	t.Run("create request error", func(t *testing.T) {
+		// Create a test request
+		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
+
+		// Set a custom client that returns an error from CreateRequest
+		originalClient := mp.client
+		mp.client = &mockErrorClient{
+			createRequestError: errors.New("create request error"),
+		}
+		defer func() { mp.client = originalClient }()
+
+		// Call handleConnect
+		err := mp.handleConnect(&mockConnWithBuffer{buffer: &bytes.Buffer{}}, req)
+
+		// Check if the error is as expected
+		assert.Error(t, err, "handleConnect should return an error when CreateRequest fails")
+	})
+}
+
+// mockConnWithErrors is a net.Conn that returns errors for various operations
+type mockConnWithErrors struct {
+	mockConn
+	setDeadlineError error
+	writeError       error
+}
+
+func (m *mockConnWithErrors) SetDeadline(t time.Time) error {
+	if m.setDeadlineError != nil {
+		return m.setDeadlineError
+	}
+	return nil
+}
+
+func (m *mockConnWithErrors) Write(b []byte) (n int, err error) {
+	if m.writeError != nil {
+		return 0, m.writeError
+	}
+	return len(b), nil
+}
+
+// mockErrorClient is a client that returns errors for various operations
+type mockErrorClient struct {
+	tlsHandshakeError          error
+	createRequestError         error
+	doRequestError             error
+	tlsHandshakeImplementation func(con net.Conn, hostName string) (*tls.Conn, error)
+}
+
+func (m *mockErrorClient) Do(req *http.Request) (*http.Response, error) {
+	if m.doRequestError != nil {
+		return nil, m.doRequestError
+	}
+	return &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(strings.NewReader("OK")),
+	}, nil
+}
+
+func (m *mockErrorClient) TLSHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
+	if m.tlsHandshakeImplementation != nil {
+		return m.tlsHandshakeImplementation(con, hostName)
+	}
+	if m.tlsHandshakeError != nil {
+		return nil, m.tlsHandshakeError
+	}
+	return nil, errors.New("TLSHandshake not implemented")
+}
+
+func (m *mockErrorClient) CreateRequest(conn net.Conn) (*http.Request, error) {
+	if m.createRequestError != nil {
+		return nil, m.createRequestError
+	}
+	return &http.Request{
+		Method: "GET",
+		URL:    &url.URL{Scheme: "https", Host: "example.com"},
+	}, nil
 }

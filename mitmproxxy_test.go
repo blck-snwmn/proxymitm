@@ -377,7 +377,7 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 		w := httptest.NewRecorder()
 
 		err := mp.handleNonConnect(w, req)
-		assert.Error(t, err, "Should return an error for request with body that errors")
+		require.Error(t, err, "Should return an error for request with body that errors")
 		assert.IsType(t, &ProxyError{}, err, "Error should be a ProxyError")
 
 		proxyErr, ok := err.(*ProxyError)
@@ -399,7 +399,7 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 		defer func() { mp.client = originalClient }()
 
 		err := mp.handleNonConnect(w, req)
-		assert.Error(t, err, "Should return an error when client.Do fails")
+		require.Error(t, err, "Should return an error when client.Do fails")
 		assert.IsType(t, &ProxyError{}, err, "Error should be a ProxyError")
 
 		proxyErr, ok := err.(*ProxyError)
@@ -461,9 +461,7 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 func TestServerMux_CreateRequest(t *testing.T) {
 	t.Parallel()
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	require.NoError(t, err, "Failed to create MitmProxy")
 
 	// Create a mock connection that returns a valid HTTP request
 	mockConn := &mockConn{
@@ -585,9 +583,7 @@ func TestServerMux_WriteConnectionEstablished(t *testing.T) {
 func TestServerMux_WriteResponse(t *testing.T) {
 	t.Parallel()
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	require.NoError(t, err, "Failed to create MitmProxy")
 
 	tests := []struct {
 		name     string
@@ -759,9 +755,7 @@ func TestMitmProxy_WithInterceptors(t *testing.T) {
 
 	for _, interceptor := range mp.interceptors {
 		modifiedReq, skip, processErr = interceptor.ProcessRequest(modifiedReq)
-		if processErr != nil {
-			t.Fatalf("ProcessRequest failed: %v", processErr)
-		}
+		require.NoError(t, processErr, "ProcessRequest failed")
 		if skip {
 			t.Fatalf("ProcessRequest returned skip=true")
 		}
@@ -769,9 +763,7 @@ func TestMitmProxy_WithInterceptors(t *testing.T) {
 
 	// Verify request headers
 	userAgent := modifiedReq.Header.Get("User-Agent")
-	if userAgent != "TestAgent/1.0" {
-		t.Errorf("User-Agent header was not modified, got %q, want %q", userAgent, "TestAgent/1.0")
-	}
+	assert.Equal(t, "TestAgent/1.0", userAgent, "User-Agent header was not modified, got %q, want %q", userAgent, "TestAgent/1.0")
 
 	// Process response through interceptor chain in reverse order
 	modifiedResp := originalResp
@@ -779,26 +771,18 @@ func TestMitmProxy_WithInterceptors(t *testing.T) {
 
 	for i := len(mp.interceptors) - 1; i >= 0; i-- {
 		modifiedResp, respErr = mp.interceptors[i].ProcessResponse(modifiedResp, modifiedReq)
-		if respErr != nil {
-			t.Fatalf("ProcessResponse failed: %v", respErr)
-		}
+		require.NoError(t, respErr, "ProcessResponse failed")
 	}
 
 	// Verify response headers
-	if modifiedResp.Header.Get("X-Test-Header") != "TestValue" {
-		t.Errorf("X-Test-Header was not added, got %q, want %q", modifiedResp.Header.Get("X-Test-Header"), "TestValue")
-	}
+	assert.Equal(t, "TestValue", modifiedResp.Header.Get("X-Test-Header"), "X-Test-Header was not added")
 
 	// Read response body
 	body, err := io.ReadAll(modifiedResp.Body)
-	if err != nil {
-		t.Fatalf("Failed to read response body: %v", err)
-	}
+	require.NoError(t, err, "Failed to read response body")
 
 	// Ensure body is modified
-	if !strings.Contains(string(body), "modified-content") {
-		t.Errorf("Response body was not modified, got %q, expected to contain %q", string(body), "modified-content")
-	}
+	assert.Contains(t, string(body), "modified-content", "Response body was not modified, got %q, expected to contain %q", string(body), "modified-content")
 }
 
 // TestMitmProxy_InterceptorChain is a test for the processing order of the interceptor chain
@@ -848,9 +832,7 @@ func TestMitmProxy_InterceptorChain(t *testing.T) {
 
 	for _, interceptor := range mp.interceptors {
 		modifiedReq, skip, processErr = interceptor.ProcessRequest(modifiedReq)
-		if processErr != nil {
-			t.Fatalf("ProcessRequest failed: %v", processErr)
-		}
+		require.NoError(t, processErr, "ProcessRequest failed")
 		if skip {
 			t.Fatalf("ProcessRequest returned skip=true")
 		}
@@ -858,9 +840,7 @@ func TestMitmProxy_InterceptorChain(t *testing.T) {
 
 	// Verify request headers
 	processedBy := modifiedReq.Header.Values("X-Processed-By")
-	if len(processedBy) != 3 {
-		t.Errorf("Expected 3 X-Processed-By headers, got %d", len(processedBy))
-	}
+	assert.Len(t, processedBy, 3, "Expected 3 X-Processed-By headers, got %d", len(processedBy))
 
 	// Process response through interceptor chain in reverse order
 	modifiedResp := resp
@@ -868,16 +848,12 @@ func TestMitmProxy_InterceptorChain(t *testing.T) {
 
 	for i := len(mp.interceptors) - 1; i >= 0; i-- {
 		modifiedResp, respErr = mp.interceptors[i].ProcessResponse(modifiedResp, modifiedReq)
-		if respErr != nil {
-			t.Fatalf("ProcessResponse failed: %v", respErr)
-		}
+		require.NoError(t, respErr, "ProcessResponse failed")
 	}
 
 	// Verify response headers
 	processedBy = modifiedResp.Header.Values("X-Processed-By")
-	if len(processedBy) != 3 {
-		t.Errorf("Expected 3 X-Processed-By headers, got %d", len(processedBy))
-	}
+	assert.Len(t, processedBy, 3, "Expected 3 X-Processed-By headers, got %d", len(processedBy))
 
 	// Verify processing order
 	expectedOrder := []string{
@@ -1286,7 +1262,7 @@ func TestNew(t *testing.T) {
 
 	t.Run("invalid certificate path", func(t *testing.T) {
 		server, err := New("./testdata/nonexistent.crt", "./testdata/ca.key")
-		assert.Error(t, err, "Should return an error for invalid certificate path")
+		require.Error(t, err, "Should return an error for invalid certificate path")
 		assert.Nil(t, server, "Server should be nil")
 
 		var proxyErr *ProxyError

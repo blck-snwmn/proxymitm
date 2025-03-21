@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestProxyError_Error(t *testing.T) {
@@ -49,7 +50,7 @@ func TestProxyError_Error(t *testing.T) {
 			if tt.wantErr == nil {
 				assert.Nil(t, got, "ProxyError.Unwrap() should be nil")
 			} else {
-				assert.NotNil(t, got, "ProxyError.Unwrap() should not be nil")
+				require.NotNil(t, got, "ProxyError.Unwrap() should not be nil")
 				assert.Equal(t, tt.wantErr.Error(), got.Error(), "Unwrapped error message should match")
 			}
 		})
@@ -111,12 +112,12 @@ func TestGetProxyError(t *testing.T) {
 
 	// Get ProxyError from ProxyError
 	got1 := GetProxyError(proxyErr)
-	assert.NotNil(t, got1, "GetProxyError should return non-nil for ProxyError")
+	require.NotNil(t, got1, "GetProxyError should return non-nil for ProxyError")
 	assert.Equal(t, ErrHijack, got1.Type, "GetProxyError should return correct Type")
 
 	// Get ProxyError from wrapped error
 	got2 := GetProxyError(wrappedErr)
-	assert.NotNil(t, got2, "GetProxyError should return non-nil for wrapped ProxyError")
+	require.NotNil(t, got2, "GetProxyError should return non-nil for wrapped ProxyError")
 	assert.Equal(t, ErrHijack, got2.Type, "GetProxyError should return correct Type")
 
 	// Return nil from normal error

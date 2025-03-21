@@ -6,10 +6,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -326,13 +328,86 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 
 	// Create a test server that will be proxied to
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		_, err := w.Write([]byte("Hello from target"))
 		require.NoError(t, err, "Should be able to write response")
 	}))
 	defer targetServer.Close()
 
-	// Create a test request with a valid URL
+	// Test directly the handleNonConnect method with various inputs
+	t.Run("successful non-connect request", func(t *testing.T) {
+		// Test with a valid URL - direct method call
+		req := httptest.NewRequest(http.MethodGet, targetServer.URL+"/test", nil)
+		w := httptest.NewRecorder()
+
+		// We use a custom client to avoid actual network calls
+		originalClient := mp.client
+		mp.client = &mockHTTPClient{
+			response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/plain"}},
+				Body:       io.NopCloser(strings.NewReader("Mock response body")),
+			},
+			err: nil,
+		}
+		defer func() { mp.client = originalClient }()
+
+		// Direct method call
+		err := mp.handleNonConnect(w, req)
+		require.NoError(t, err, "handleNonConnect should not return an error")
+
+		// Verify response
+		assert.Equal(t, http.StatusOK, w.Code, "Should return OK status")
+		assert.Equal(t, "Mock response body", w.Body.String(), "Response body should match")
+		assert.Equal(t, "text/plain", w.Header().Get("Content-Type"), "Content-Type header should be set")
+	})
+
+	t.Run("error creating request", func(t *testing.T) {
+		// Invalid URL that will cause an error in http.NewRequest
+		req := &http.Request{
+			Method: http.MethodGet,
+			URL: &url.URL{
+				Scheme: "http",
+				Host:   "example.com",
+				Path:   "/test",
+			},
+			Body: &errReader{}, // Will cause an error when reading
+		}
+		w := httptest.NewRecorder()
+
+		err := mp.handleNonConnect(w, req)
+		assert.Error(t, err, "Should return an error for request with body that errors")
+		assert.IsType(t, &ProxyError{}, err, "Error should be a ProxyError")
+
+		proxyErr, ok := err.(*ProxyError)
+		assert.True(t, ok, "Error should be castable to ProxyError")
+		assert.Equal(t, ErrSendRequest, proxyErr.Type, "Error type should be ErrSendRequest")
+	})
+
+	t.Run("error during client.Do", func(t *testing.T) {
+		// Test with client.Do returning an error
+		req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+		w := httptest.NewRecorder()
+
+		// Use custom client that returns an error
+		originalClient := mp.client
+		mp.client = &mockHTTPClient{
+			response: nil,
+			err:      errors.New("mock client error"),
+		}
+		defer func() { mp.client = originalClient }()
+
+		err := mp.handleNonConnect(w, req)
+		assert.Error(t, err, "Should return an error when client.Do fails")
+		assert.IsType(t, &ProxyError{}, err, "Error should be a ProxyError")
+
+		proxyErr, ok := err.(*ProxyError)
+		assert.True(t, ok, "Error should be castable to ProxyError")
+		assert.Equal(t, ErrSendRequest, proxyErr.Type, "Error type should be ErrSendRequest")
+	})
+
+	// Original ServeHTTP test - proxying through the full stack
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
 	w := httptest.NewRecorder()
 
@@ -406,6 +481,7 @@ func TestServerMux_CreateRequest(t *testing.T) {
 type mockConn struct {
 	readData []byte
 	readPos  int
+	writeFn  func([]byte) (int, error)
 }
 
 func (m *mockConn) Read(b []byte) (n int, err error) {
@@ -418,7 +494,13 @@ func (m *mockConn) Read(b []byte) (n int, err error) {
 }
 
 // Implement other required net.Conn interface methods
-func (m *mockConn) Write(b []byte) (n int, err error)  { return len(b), nil }
+func (m *mockConn) Write(b []byte) (n int, err error) {
+	if m.writeFn != nil {
+		return m.writeFn(b)
+	}
+	return len(b), nil
+}
+
 func (m *mockConn) Close() error                       { return nil }
 func (m *mockConn) LocalAddr() net.Addr                { return nil }
 func (m *mockConn) RemoteAddr() net.Addr               { return nil }
@@ -1072,4 +1154,292 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	if len(inspectingClient.BodyLog) > 0 {
 		t.Logf("Successfully intercepted %d response bodies", len(inspectingClient.BodyLog))
 	}
+}
+
+// TestDefaultLogger tests the logger implementation
+func TestDefaultLogger(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		level     LogLevel
+		shouldLog bool
+		logType   string
+		logFunc   func(logger *DefaultLogger)
+	}{
+		{
+			name:      "debug logs when level is debug",
+			level:     LogLevelDebug,
+			shouldLog: true,
+			logType:   "debug",
+			logFunc: func(logger *DefaultLogger) {
+				logger.Debug("test message")
+			},
+		},
+		{
+			name:      "info logs when level is debug",
+			level:     LogLevelDebug,
+			shouldLog: true,
+			logType:   "info",
+			logFunc: func(logger *DefaultLogger) {
+				logger.Info("test message")
+			},
+		},
+		{
+			name:      "warn logs when level is debug",
+			level:     LogLevelDebug,
+			shouldLog: true,
+			logType:   "warn",
+			logFunc: func(logger *DefaultLogger) {
+				logger.Warn("test message")
+			},
+		},
+		{
+			name:      "warn logs when level is info",
+			level:     LogLevelInfo,
+			shouldLog: true,
+			logType:   "warn",
+			logFunc: func(logger *DefaultLogger) {
+				logger.Warn("test message")
+			},
+		},
+		{
+			name:      "warn logs when level is warn",
+			level:     LogLevelWarn,
+			shouldLog: true,
+			logType:   "warn",
+			logFunc: func(logger *DefaultLogger) {
+				logger.Warn("test message")
+			},
+		},
+		{
+			name:      "warn does not log when level is error",
+			level:     LogLevelError,
+			shouldLog: false,
+			logType:   "warn",
+			logFunc: func(logger *DefaultLogger) {
+				logger.Warn("test message")
+			},
+		},
+		{
+			name:      "error logs when level is error",
+			level:     LogLevelError,
+			shouldLog: true,
+			logType:   "error",
+			logFunc: func(logger *DefaultLogger) {
+				logger.Error("test message")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Redirect log output to a buffer
+			var buf bytes.Buffer
+			originalOutput := log.Writer()
+			log.SetOutput(&buf)
+			defer log.SetOutput(originalOutput)
+
+			// Create logger with test level
+			logger := NewDefaultLogger(tt.level)
+
+			// Call the log function
+			tt.logFunc(logger)
+
+			// Check if log was output as expected
+			output := buf.String()
+			if tt.shouldLog {
+				expectedPrefix := ""
+				switch tt.logType {
+				case "debug":
+					expectedPrefix = "[DEBUG]"
+				case "info":
+					expectedPrefix = "[INFO]"
+				case "warn":
+					expectedPrefix = "[WARN]"
+				case "error":
+					expectedPrefix = "[ERROR]"
+				}
+				assert.Contains(t, output, expectedPrefix, "Log output should contain the correct prefix")
+				assert.Contains(t, output, "test message", "Log output should contain the message")
+			} else {
+				assert.Equal(t, "", output, "No log should be output")
+			}
+		})
+	}
+}
+
+func TestNew(t *testing.T) {
+	t.Parallel()
+
+	t.Run("successful server creation", func(t *testing.T) {
+		server, err := New("./testdata/ca.crt", "./testdata/ca.key")
+		require.NoError(t, err, "Should be able to create HTTP server")
+		require.NotNil(t, server, "Server should not be nil")
+
+		// Check server timeouts
+		assert.Equal(t, DefaultReadTimeout, server.ReadTimeout, "ReadTimeout should match default")
+		assert.Equal(t, DefaultWriteTimeout, server.WriteTimeout, "WriteTimeout should match default")
+		assert.Equal(t, DefaultIdleTimeout, server.IdleTimeout, "IdleTimeout should match default")
+
+		// Check if handler is properly set
+		require.NotNil(t, server.Handler, "Handler should not be nil")
+		_, ok := server.Handler.(*ServerMux)
+		assert.True(t, ok, "Handler should be a ServerMux")
+	})
+
+	t.Run("invalid certificate path", func(t *testing.T) {
+		server, err := New("./testdata/nonexistent.crt", "./testdata/ca.key")
+		assert.Error(t, err, "Should return an error for invalid certificate path")
+		assert.Nil(t, server, "Server should be nil")
+
+		var proxyErr *ProxyError
+		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
+		assert.Equal(t, ErrCertificate, proxyErr.Type, "Error type should be ErrCertificate")
+	})
+
+	t.Run("invalid key path", func(t *testing.T) {
+		server, err := New("./testdata/ca.crt", "./testdata/nonexistent.key")
+		assert.Error(t, err, "Should return an error for invalid key path")
+		assert.Nil(t, server, "Server should be nil")
+
+		var proxyErr *ProxyError
+		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
+		assert.Equal(t, ErrCertificate, proxyErr.Type, "Error type should be ErrCertificate")
+	})
+
+	t.Run("invalid certificate format", func(t *testing.T) {
+		// Create a test file with invalid certificate format
+		tempFile, err := os.CreateTemp("", "invalid-cert-*.crt")
+		require.NoError(t, err, "Should be able to create temp file")
+		defer os.Remove(tempFile.Name())
+
+		_, err = tempFile.WriteString("THIS IS NOT A VALID CERTIFICATE")
+		require.NoError(t, err, "Should be able to write to temp file")
+		require.NoError(t, tempFile.Close(), "Should be able to close temp file")
+
+		server, err := New(tempFile.Name(), "./testdata/ca.key")
+		assert.Error(t, err, "Should return an error for invalid certificate format")
+		assert.Nil(t, server, "Server should be nil")
+
+		var proxyErr *ProxyError
+		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
+		assert.Equal(t, ErrCertificate, proxyErr.Type, "Error type should be ErrCertificate")
+	})
+}
+
+func TestServerMux_HandleConnectError(t *testing.T) {
+	t.Parallel()
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	require.NoError(t, err, "Should be able to create MitmProxy")
+
+	t.Run("handle proxy error", func(t *testing.T) {
+		// Create a mock connection that captures output
+		bufConn := &mockConnWithBuffer{
+			buffer: &bytes.Buffer{},
+		}
+
+		// Create a proxy error
+		proxyErr := NewProxyError(ErrTLSHandshake, "test_op", "test error message", nil)
+
+		// Set up a logger that will capture logs
+		var logBuf bytes.Buffer
+		testLogger := &DefaultLogger{level: LogLevelDebug}
+		origLogger := log.Writer()
+		log.SetOutput(&logBuf)
+		defer log.SetOutput(origLogger)
+
+		// Save original logger and restore it after test
+		origMpLogger := mp.logger
+		mp.logger = testLogger
+		defer func() { mp.logger = origMpLogger }()
+
+		// Call handleConnectError
+		mp.handleConnectError(bufConn, proxyErr)
+
+		// Verify error response was written
+		assert.Contains(t, bufConn.buffer.String(), "HTTP/1.0 500", "Error response should contain 500 status code")
+
+		// Verify error was logged
+		assert.Contains(t, logBuf.String(), "Connect error", "Error should be logged")
+		assert.Contains(t, logBuf.String(), "tls_handshake", "Error type should be logged")
+	})
+
+	t.Run("handle regular error", func(t *testing.T) {
+		// Create a mock connection that captures output
+		bufConn := &mockConnWithBuffer{
+			buffer: &bytes.Buffer{},
+		}
+
+		// Create a regular error
+		regularErr := errors.New("regular test error")
+
+		// Set up a logger that will capture logs
+		var logBuf bytes.Buffer
+		testLogger := &DefaultLogger{level: LogLevelDebug}
+		origLogger := log.Writer()
+		log.SetOutput(&logBuf)
+		defer log.SetOutput(origLogger)
+
+		// Save original logger and restore it after test
+		origMpLogger := mp.logger
+		mp.logger = testLogger
+		defer func() { mp.logger = origMpLogger }()
+
+		// Call handleConnectError
+		mp.handleConnectError(bufConn, regularErr)
+
+		// Verify error response was written
+		assert.Contains(t, bufConn.buffer.String(), "HTTP/1.0 500", "Error response should contain 500 status code")
+
+		// Verify error was logged
+		assert.Contains(t, logBuf.String(), "Connect error", "Error should be logged")
+		assert.Contains(t, logBuf.String(), "regular test error", "Error message should be logged")
+	})
+
+	t.Run("handle write error", func(t *testing.T) {
+		// Create a mock connection that fails on write
+		failConn := &mockConn{
+			readData: []byte{},
+			readPos:  0,
+			writeFn: func(b []byte) (int, error) {
+				return 0, errors.New("failed to write error response")
+			},
+		}
+
+		// Create a proxy error
+		proxyErr := NewProxyError(ErrTLSHandshake, "test_op", "test error message", nil)
+
+		// Set up a logger that will capture logs
+		var logBuf bytes.Buffer
+		testLogger := &DefaultLogger{level: LogLevelDebug}
+		origLogger := log.Writer()
+		log.SetOutput(&logBuf)
+		defer log.SetOutput(origLogger)
+
+		// Save original logger and restore it after test
+		origMpLogger := mp.logger
+		mp.logger = testLogger
+		defer func() { mp.logger = origMpLogger }()
+
+		// Call handleConnectError
+		mp.handleConnectError(failConn, proxyErr)
+
+		// Verify write error was logged
+		assert.Contains(t, logBuf.String(), "Failed to write error response", "Write error should be logged")
+	})
+}
+
+// errReader is a reader that always returns an error
+type errReader struct{}
+
+func (e *errReader) Read(p []byte) (n int, err error) {
+	return 0, errors.New("read error")
+}
+
+func (e *errReader) Close() error {
+	return nil
 }

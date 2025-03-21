@@ -72,18 +72,19 @@ func Test_createX509Certificate(t *testing.T) {
 		{name: "create cert other", args: args{hostName: "www.google.com"}, wantErr: false},
 	}
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Errorf("create MitimProxy failed")
-	}
+	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	for _, tt := range tests {
+		tt := tt // キャプチャ変数のシャドウイング
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			template := mitmx509template(tt.args.hostName)
 			c, _, err := mp.createX509Certificate(template)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("createCert() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err, "createCert() should return an error")
 				return
 			}
+			assert.NoError(t, err, "createCert() should not return an error")
 
 			roots := x509.NewCertPool()
 			roots.AddCert(mp.x509Cert)
@@ -91,38 +92,27 @@ func Test_createX509Certificate(t *testing.T) {
 				DNSName: tt.args.hostName,
 				Roots:   roots,
 			}
-			if _, err = c.Verify(vop); err != nil {
-				t.Errorf("Verify failed error = %v", err)
-			}
+			_, err = c.Verify(vop)
+			assert.NoError(t, err, "Certificate should be valid and verify successfully")
 		})
 	}
 }
 
 func TestMitmx509template(t *testing.T) {
+	t.Parallel()
 	expected := "hostname"
 	cert := mitmx509template(expected)
-	if len(cert.DNSNames) != 1 {
-		t.Error("DNSNames length isn't 1")
-	}
-	cn := false
-	for _, n := range cert.DNSNames {
-		if n == expected {
-			cn = true
-		}
-	}
-	if !cn {
-		t.Errorf("DNSNames don't contain %s", expected)
-	}
+	
+	assert.Len(t, cert.DNSNames, 1, "DNSNames should have exactly 1 entry")
+	assert.Contains(t, cert.DNSNames, expected, "DNSNames should contain the hostname")
 }
 
 func TestMitmProxy_Handler(t *testing.T) {
+	t.Parallel()
 	// MITMプロキシを作成
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	require.NoError(t, err, "Should be able to create MitmProxy")
 
-	// テスト用のインターセプターを作成
 	var requestReceived bool
 	var responseStatus int
 
@@ -148,10 +138,7 @@ func TestMitmProxy_Handler(t *testing.T) {
 
 	// プロキシサーバーを作成
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodConnect {
-			t.Error("request method isn't connect")
-			return
-		}
+		assert.Equal(t, http.MethodConnect, r.Method, "Request method should be CONNECT")
 		mp.ServeHTTP(w, r)
 	}))
 	defer hs.Close()
@@ -170,14 +157,10 @@ func TestMitmProxy_Handler(t *testing.T) {
 	}
 
 	proxyURL, err := parseLocalhost(hs.URL)
-	if err != nil {
-		t.Fatalf("Failed to parse proxy URL: %v", err)
-	}
+	require.NoError(t, err, "Should be able to parse proxy URL")
 
 	requestURL, err := parseLocalhost(ts.URL)
-	if err != nil {
-		t.Fatalf("Failed to parse request URL: %v", err)
-	}
+	require.NoError(t, err, "Should be able to parse request URL")
 
 	// 証明書プールを設定
 	pool := x509.NewCertPool()
@@ -205,28 +188,19 @@ func TestMitmProxy_Handler(t *testing.T) {
 
 	// リクエストを送信
 	resp, err := client.Get(requestURL.String())
-	if err != nil {
-		t.Fatalf("Failed to send request: %v", err)
-	}
+	require.NoError(t, err, "Should be able to send request")
 	defer resp.Body.Close()
 
 	// インターセプターが呼び出されたことを確認
-	if !requestReceived {
-		t.Error("Request interceptor was not called")
-	}
+	assert.True(t, requestReceived, "Request interceptor should be called")
 
 	// レスポンスステータスが正しいことを確認
-	if responseStatus != http.StatusOK {
-		t.Errorf("Expected response status %d, got %d", http.StatusOK, responseStatus)
-	}
+	assert.Equal(t, http.StatusOK, responseStatus, "Interceptor should receive correct response status")
 
 	// レスポンスステータスが正しいことを確認
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Expected response status %d, got %d", http.StatusOK, resp.StatusCode)
-	}
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "Client should receive correct response status")
 }
 
-// testResponseInterceptor はテスト用のインターセプター
 type testResponseInterceptor struct {
 	onRequest  func(*http.Request) (*http.Request, bool, error)
 	onResponse func(*http.Response, *http.Request) (*http.Response, error)
@@ -348,16 +322,13 @@ func TestMitmProxy_Connected(t *testing.T) {
 func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 	t.Parallel()
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	// Create a test server that will be proxied to
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte("Hello from target")); err != nil {
-			t.Errorf("Failed to write response: %v", err)
-		}
+		_, err := w.Write([]byte("Hello from target"))
+		require.NoError(t, err, "Should be able to write response")
 	}))
 	defer targetServer.Close()
 
@@ -370,17 +341,13 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 
 	// Since this is a non-CONNECT request, we expect an internal server error
 	// because the proxy is primarily designed for CONNECT requests
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status code %d, got %d", http.StatusInternalServerError, w.Code)
-	}
+	assert.Equal(t, http.StatusInternalServerError, w.Code, "Should return internal server error for non-CONNECT requests")
 }
 
 func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 	t.Parallel()
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	tests := []struct {
 		name         string
@@ -411,9 +378,7 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 
 			mp.ServeHTTP(w, req)
 
-			if w.Code != tt.expectedCode {
-				t.Errorf("Expected status code %d, got %d", tt.expectedCode, w.Code)
-			}
+			assert.Equal(t, tt.expectedCode, w.Code, "Should return expected status code")
 		})
 	}
 }
@@ -431,16 +396,10 @@ func TestServerMux_CreateRequest(t *testing.T) {
 	}
 
 	req, err := mp.createRequest(mockConn)
-	if err != nil {
-		t.Fatalf("createRequest failed: %v", err)
-	}
+	require.NoError(t, err, "createRequest should not return an error")
 
-	if req.Method != "GET" {
-		t.Errorf("Expected method GET, got %s", req.Method)
-	}
-	if req.URL.String() != "https://example.com/path" {
-		t.Errorf("Expected URL https://example.com/path, got %s", req.URL.String())
-	}
+	assert.Equal(t, "GET", req.Method, "Request method should be GET")
+	assert.Equal(t, "https://example.com/path", req.URL.String(), "Request URL should be correctly constructed")
 }
 
 // mockConn implements the net.Conn interface for testing
@@ -470,9 +429,7 @@ func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 func TestServerMux_HijackConnection(t *testing.T) {
 	t.Parallel()
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	tests := []struct {
 		name        string
@@ -496,14 +453,16 @@ func TestServerMux_HijackConnection(t *testing.T) {
 			t.Parallel()
 			w := tt.setupWriter()
 			_, err := mp.hijackConnection(w)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("hijackConnection() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if err != nil {
-				if proxyErr, ok := err.(*ProxyError); !ok || proxyErr.Type != tt.errType {
-					t.Errorf("hijackConnection() error type = %v, want %v", proxyErr.Type, tt.errType)
+			
+			if tt.wantErr {
+				assert.Error(t, err, "hijackConnection() should return an error")
+				if proxyErr, ok := err.(*ProxyError); ok {
+					assert.Equal(t, tt.errType, proxyErr.Type, "Error type should match expected type")
+				} else {
+					t.Errorf("Expected ProxyError, got %T", err)
 				}
+			} else {
+				assert.NoError(t, err, "hijackConnection() should not return an error")
 			}
 		})
 	}
@@ -512,9 +471,7 @@ func TestServerMux_HijackConnection(t *testing.T) {
 func TestServerMux_WriteConnectionEstablished(t *testing.T) {
 	t.Parallel()
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	tests := []struct {
 		name    string
@@ -532,8 +489,12 @@ func TestServerMux_WriteConnectionEstablished(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if err := mp.writeConnectionEstablished(tt.conn); (err != nil) != tt.wantErr {
-				t.Errorf("writeConnectionEstablished() error = %v, wantErr %v", err, tt.wantErr)
+			err := mp.writeConnectionEstablished(tt.conn)
+			
+			if tt.wantErr {
+				assert.Error(t, err, "writeConnectionEstablished() should return an error")
+			} else {
+				assert.NoError(t, err, "writeConnectionEstablished() should not return an error")
 			}
 		})
 	}
@@ -569,12 +530,15 @@ func TestServerMux_WriteResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			w := httptest.NewRecorder()
-			if err := mp.writeResponse(w, tt.resp); (err != nil) != tt.wantErr {
-				t.Errorf("writeResponse() error = %v, wantErr %v", err, tt.wantErr)
+			err := mp.writeResponse(w, tt.resp)
+			
+			if tt.wantErr {
+				assert.Error(t, err, "writeResponse() should return an error")
+			} else {
+				assert.NoError(t, err, "writeResponse() should not return an error")
 			}
-			if w.Code != tt.wantCode {
-				t.Errorf("writeResponse() status code = %v, want %v", w.Code, tt.wantCode)
-			}
+			
+			assert.Equal(t, tt.wantCode, w.Code, "Response status code should match expected code")
 		})
 	}
 }
@@ -642,8 +606,11 @@ func TestServerMux_ForwardRequest(t *testing.T) {
 			// テストケースごとにクライアントを設定
 			mp.client = client
 			err := mp.forwardRequest(conn, req)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("forwardRequest() error = %v, wantErr %v", err, tt.wantErr)
+			
+			if tt.wantErr {
+				assert.Error(t, err, "forwardRequest() should return an error")
+			} else {
+				assert.NoError(t, err, "forwardRequest() should not return an error")
 			}
 		})
 	}

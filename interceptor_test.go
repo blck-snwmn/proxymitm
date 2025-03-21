@@ -89,20 +89,12 @@ func TestContentModifierInterceptor(t *testing.T) {
 		req.Header.Set("User-Agent", "Original/1.0")
 
 		modifiedReq, skip, err := interceptor.ProcessRequest(req)
-		if err != nil {
-			t.Fatalf("ProcessRequest failed: %v", err)
-		}
-		if skip {
-			t.Errorf("ProcessRequest returned skip=true, expected false")
-		}
+		require.NoError(t, err, "ProcessRequest should not return an error")
+		assert.False(t, skip, "ProcessRequest should not skip the request")
 
-		// ヘッダーが変更されていることを確認
-		if modifiedReq.Header.Get("User-Agent") != "Modified/1.0" {
-			t.Errorf("User-Agent header was not modified, got %q, want %q", modifiedReq.Header.Get("User-Agent"), "Modified/1.0")
-		}
-		if modifiedReq.Header.Get("X-Custom-Header") != "CustomValue" {
-			t.Errorf("X-Custom-Header was not added, got %q, want %q", modifiedReq.Header.Get("X-Custom-Header"), "CustomValue")
-		}
+		// リクエストヘッダーが変更されていることを確認
+		assert.Equal(t, "Modified/1.0", modifiedReq.Header.Get("User-Agent"), "User-Agent header should be modified")
+		assert.Equal(t, "CustomValue", modifiedReq.Header.Get("X-Custom-Header"), "X-Custom-Header should be added")
 	})
 
 	// レスポンス処理のテスト
@@ -118,32 +110,20 @@ func TestContentModifierInterceptor(t *testing.T) {
 		resp.Header.Set("Server", "Original/1.0")
 
 		modifiedResp, err := interceptor.ProcessResponse(resp, req)
-		if err != nil {
-			t.Fatalf("ProcessResponse failed: %v", err)
-		}
+		require.NoError(t, err, "ProcessResponse should not return an error")
 
 		// ヘッダーが変更されていることを確認
-		if modifiedResp.Header.Get("Server") != "Modified/1.0" {
-			t.Errorf("Server header was not modified, got %q, want %q", modifiedResp.Header.Get("Server"), "Modified/1.0")
-		}
-		if modifiedResp.Header.Get("X-Custom-Response") != "CustomValue" {
-			t.Errorf("X-Custom-Response was not added, got %q, want %q", modifiedResp.Header.Get("X-Custom-Response"), "CustomValue")
-		}
+		assert.Equal(t, "Modified/1.0", modifiedResp.Header.Get("Server"), "Server header should be modified")
+		assert.Equal(t, "CustomValue", modifiedResp.Header.Get("X-Custom-Response"), "X-Custom-Response should be added")
 
 		// ボディが変更されていることを確認
 		body, err := io.ReadAll(modifiedResp.Body)
-		if err != nil {
-			t.Fatalf("Failed to read response body: %v", err)
-		}
+		require.NoError(t, err, "Should be able to read response body")
 		expectedBody := "This is an replaced text"
-		if string(body) != expectedBody {
-			t.Errorf("Response body was not modified correctly, got %q, want %q", string(body), expectedBody)
-		}
+		assert.Equal(t, expectedBody, string(body), "Response body should be modified correctly")
 
 		// Content-Lengthヘッダーが更新されていることを確認
-		if modifiedResp.Header.Get("Content-Length") != "24" {
-			t.Errorf("Content-Length header was not updated, got %q, want %q", modifiedResp.Header.Get("Content-Length"), "24")
-		}
+		assert.Equal(t, "24", modifiedResp.Header.Get("Content-Length"), "Content-Length header should be updated")
 	})
 }
 
@@ -173,15 +153,9 @@ func TestFilteringInterceptor(t *testing.T) {
 		req.Header.Set("User-Agent", "AllowedAgent")
 
 		modifiedReq, skip, err := interceptor.ProcessRequest(req)
-		if err != nil {
-			t.Fatalf("ProcessRequest failed: %v", err)
-		}
-		if skip {
-			t.Errorf("ProcessRequest returned skip=true for allowed request")
-		}
-		if modifiedReq != req {
-			t.Errorf("ProcessRequest modified the allowed request")
-		}
+		require.NoError(t, err, "ProcessRequest should not return an error")
+		assert.False(t, skip, "ProcessRequest should not skip the request")
+		assert.Equal(t, req, modifiedReq, "ProcessRequest should not modify the allowed request")
 	})
 
 	// ブロックされたホスト名のテスト
@@ -190,12 +164,8 @@ func TestFilteringInterceptor(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://blocked.example.com/test", nil)
 
 		_, skip, err := interceptor.ProcessRequest(req)
-		if err != nil {
-			t.Fatalf("ProcessRequest failed: %v", err)
-		}
-		if !skip {
-			t.Errorf("ProcessRequest returned skip=false for blocked host")
-		}
+		require.NoError(t, err, "ProcessRequest should not return an error")
+		assert.True(t, skip, "ProcessRequest should skip the blocked host request")
 
 		// レスポンス処理でブロックレスポンスが返されることを確認
 		resp := &http.Response{
@@ -206,21 +176,19 @@ func TestFilteringInterceptor(t *testing.T) {
 		}
 
 		blockedResp, err := interceptor.ProcessResponse(resp, req)
-		if err != nil {
-			t.Fatalf("ProcessResponse failed: %v", err)
-		}
+		require.NoError(t, err, "ProcessResponse should not return an error")
 
-		if blockedResp.StatusCode != http.StatusForbidden {
-			t.Errorf("Expected status code %d, got %d", http.StatusForbidden, blockedResp.StatusCode)
-		}
-
-		body, err := io.ReadAll(blockedResp.Body)
-		if err != nil {
-			t.Fatalf("Failed to read response body: %v", err)
-		}
-		if string(body) != "This resource is blocked" {
-			t.Errorf("Expected body %q, got %q", "This resource is blocked", string(body))
-		}
+		assert.Equal(t, http.StatusForbidden, blockedResp.StatusCode, "Response status code should be 403 Forbidden")
+		
+		// ボディを読み取って文字列に変換
+		bodyBytes, err := io.ReadAll(blockedResp.Body)
+		require.NoError(t, err, "Should be able to read response body")
+		// 読み取った後はボディを閉じる
+		_ = blockedResp.Body.Close()
+		// 新しいボディを設定（テストの後続の処理のため）
+		blockedResp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		
+		assert.Equal(t, "This resource is blocked", string(bodyBytes), "Response body should be the block message")
 	})
 
 	// ブロックされたパスのテスト
@@ -229,12 +197,8 @@ func TestFilteringInterceptor(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/blocked/resource", nil)
 
 		_, skip, err := interceptor.ProcessRequest(req)
-		if err != nil {
-			t.Fatalf("ProcessRequest failed: %v", err)
-		}
-		if !skip {
-			t.Errorf("ProcessRequest returned skip=false for blocked path")
-		}
+		require.NoError(t, err, "ProcessRequest should not return an error")
+		assert.True(t, skip, "ProcessRequest should skip the blocked path request")
 	})
 
 	// ブロックされたユーザーエージェントのテスト
@@ -244,12 +208,8 @@ func TestFilteringInterceptor(t *testing.T) {
 		req.Header.Set("User-Agent", "BlockedAgent/1.0")
 
 		_, skip, err := interceptor.ProcessRequest(req)
-		if err != nil {
-			t.Fatalf("ProcessRequest failed: %v", err)
-		}
-		if !skip {
-			t.Errorf("ProcessRequest returned skip=false for blocked user agent")
-		}
+		require.NoError(t, err, "ProcessRequest should not return an error")
+		assert.True(t, skip, "ProcessRequest should skip the blocked user agent request")
 	})
 }
 
@@ -266,24 +226,16 @@ func TestRequestIDInterceptor(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
 
 		modifiedReq, skip, err := interceptor.ProcessRequest(req)
-		if err != nil {
-			t.Fatalf("ProcessRequest failed: %v", err)
-		}
-		if skip {
-			t.Errorf("ProcessRequest returned skip=true, expected false")
-		}
+		require.NoError(t, err, "ProcessRequest should not return an error")
+		assert.False(t, skip, "ProcessRequest should not skip the request")
 
 		// リクエストIDが設定されていることを確認
 		requestID := modifiedReq.Header.Get("X-Request-ID")
-		if requestID == "" {
-			t.Errorf("Request ID was not set")
-		}
+		assert.NotEmpty(t, requestID, "Request ID should be set")
 
 		// リクエストが保存されていることを確認
 		savedReq := interceptor.GetRequestByID(requestID)
-		if savedReq == nil {
-			t.Errorf("Request was not saved with ID %s", requestID)
-		}
+		assert.NotNil(t, savedReq, "Request should be saved with ID %s", requestID)
 	})
 
 	// レスポンス処理のテスト
@@ -303,20 +255,14 @@ func TestRequestIDInterceptor(t *testing.T) {
 		}
 
 		modifiedResp, err := interceptor.ProcessResponse(resp, modifiedReq)
-		if err != nil {
-			t.Fatalf("ProcessResponse failed: %v", err)
-		}
+		require.NoError(t, err, "ProcessResponse should not return an error")
 
 		// レスポンスヘッダーにリクエストIDが設定されていることを確認
-		if modifiedResp.Header.Get("X-Request-ID") != requestID {
-			t.Errorf("Response header does not contain the correct request ID")
-		}
+		assert.Equal(t, requestID, modifiedResp.Header.Get("X-Request-ID"), "Response header should contain the correct request ID")
 
 		// レスポンスが保存されていることを確認
 		savedResp := interceptor.GetResponseByID(requestID)
-		if savedResp == nil {
-			t.Errorf("Response was not saved with ID %s", requestID)
-		}
+		assert.NotNil(t, savedResp, "Response should be saved with ID %s", requestID)
 	})
 
 	// 複数のリクエストでIDが一意であることを確認
@@ -331,9 +277,7 @@ func TestRequestIDInterceptor(t *testing.T) {
 		id1 := modifiedReq1.Header.Get("X-Request-ID")
 		id2 := modifiedReq2.Header.Get("X-Request-ID")
 
-		if id1 == id2 {
-			t.Errorf("Request IDs are not unique: %s", id1)
-		}
+		assert.NotEqual(t, id1, id2, "Request IDs should be unique")
 	})
 }
 
@@ -389,20 +333,14 @@ func TestInterceptorChain(t *testing.T) {
 	}
 
 	// リクエストヘッダーが変更されていることを確認
-	if req.Header.Get("User-Agent") != "Modified/1.0" {
-		t.Errorf("User-Agent header was not modified, got %q, want %q", req.Header.Get("User-Agent"), "Modified/1.0")
-	}
+	assert.Equal(t, "Modified/1.0", req.Header.Get("User-Agent"), "User-Agent header should be modified")
 
 	// リクエストIDが設定されていることを確認
-	if req.Header.Get("X-Request-ID") == "" {
-		t.Errorf("Request ID was not set")
-	}
-
+	assert.NotEmpty(t, req.Header.Get("X-Request-ID"), "Request ID should be set")
+	
 	// レスポンスボディが変更されていることを確認（mockConnのバッファを確認）
 	responseStr := mockConn.buffer.String()
-	if !strings.Contains(responseStr, "This is an modified text") {
-		t.Errorf("Response body was not modified correctly, got %q, expected to contain %q", responseStr, "This is an modified text")
-	}
+	assert.Contains(t, responseStr, "This is an modified text", "Response body should be modified correctly")
 }
 
 // TestFilteringInterceptorBlock はフィルタリングインターセプターがリクエストをブロックするテスト
@@ -454,10 +392,6 @@ func TestFilteringInterceptorBlock(t *testing.T) {
 
 	// レスポンスがブロックレスポンスであることを確認
 	responseStr := mockConn.buffer.String()
-	if !strings.Contains(responseStr, "HTTP/1.1 403 Forbidden") {
-		t.Errorf("Response status was not 403 Forbidden, got %q", responseStr)
-	}
-	if !strings.Contains(responseStr, "This resource is blocked") {
-		t.Errorf("Response body does not contain the block message, got %q", responseStr)
-	}
+	assert.Contains(t, responseStr, "HTTP/1.1 403 Forbidden", "Response status should be 403 Forbidden")
+	assert.Contains(t, responseStr, "This resource is blocked", "Response body should be the block message")
 }

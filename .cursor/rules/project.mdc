@@ -1,0 +1,30 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# proxymitm
+
+A simple experimental MITM (Man-in-the-Middle) proxy implementation in Go. This is a toy project for learning and experimenting with HTTP/HTTPS interception.
+
+## Features
+
+- Basic HTTPS traffic interception
+- Simple certificate handling
+- Basic interceptors for:
+  - Request/Response logging
+  - Header/body modification
+  - Simple filtering
+  - Request tracking
+
+## Note
+
+This is an experimental project for learning purposes. It's not recommended for production use.
+
+## Development
+
+- Go 1.24 or later
+- Uses GitHub Actions for CI/CD
+- Includes comprehensive test coverage
+- Follows Go best practices and coding standards

@@ -262,7 +262,7 @@ func (fi *FilteringInterceptor) ProcessRequest(req *http.Request) (*http.Request
 	for _, blockedHost := range fi.blockedHosts {
 		if strings.Contains(req.Host, blockedHost) {
 			fi.logger.Info("Blocked request to host: %s", req.Host)
-			return req, true, nil // Stop processing
+			return req, true, nil // Skip subsequent interceptors and let ProcessResponse handle it
 		}
 	}
 
@@ -270,7 +270,7 @@ func (fi *FilteringInterceptor) ProcessRequest(req *http.Request) (*http.Request
 	for _, blockedPath := range fi.blockedPaths {
 		if strings.Contains(req.URL.Path, blockedPath) {
 			fi.logger.Info("Blocked request to path: %s", req.URL.Path)
-			return req, true, nil // Stop processing
+			return req, true, nil // Skip subsequent interceptors and let ProcessResponse handle it
 		}
 	}
 
@@ -279,7 +279,7 @@ func (fi *FilteringInterceptor) ProcessRequest(req *http.Request) (*http.Request
 	for _, blockedUserAgent := range fi.blockedUserAgents {
 		if strings.Contains(userAgent, blockedUserAgent) {
 			fi.logger.Info("Blocked request with User-Agent: %s", userAgent)
-			return req, true, nil // Stop processing
+			return req, true, nil // Skip subsequent interceptors and let ProcessResponse handle it
 		}
 	}
 
@@ -289,26 +289,46 @@ func (fi *FilteringInterceptor) ProcessRequest(req *http.Request) (*http.Request
 // ProcessResponse processes responses
 // Returns custom response if the request was blocked in request processing
 func (fi *FilteringInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
+	// Check if request was blocked
+	isBlocked := false
+	blockReason := ""
+
 	// Host filtering
 	for _, blockedHost := range fi.blockedHosts {
 		if strings.Contains(req.Host, blockedHost) {
-			return fi.createBlockResponse(req), nil
+			isBlocked = true
+			blockReason = "host"
+			break
 		}
 	}
 
 	// URL path filtering
-	for _, blockedPath := range fi.blockedPaths {
-		if strings.Contains(req.URL.Path, blockedPath) {
-			return fi.createBlockResponse(req), nil
+	if !isBlocked {
+		for _, blockedPath := range fi.blockedPaths {
+			if strings.Contains(req.URL.Path, blockedPath) {
+				isBlocked = true
+				blockReason = "path"
+				break
+			}
 		}
 	}
 
 	// User-Agent filtering
-	userAgent := req.Header.Get("User-Agent")
-	for _, blockedUserAgent := range fi.blockedUserAgents {
-		if strings.Contains(userAgent, blockedUserAgent) {
-			return fi.createBlockResponse(req), nil
+	if !isBlocked {
+		userAgent := req.Header.Get("User-Agent")
+		for _, blockedUserAgent := range fi.blockedUserAgents {
+			if strings.Contains(userAgent, blockedUserAgent) {
+				isBlocked = true
+				blockReason = "user-agent"
+				break
+			}
 		}
+	}
+
+	// If request was blocked, return block response
+	if isBlocked {
+		fi.logger.Info("Returning block response for %s: %s", blockReason, req.URL)
+		return fi.createBlockResponse(req), nil
 	}
 
 	return resp, nil

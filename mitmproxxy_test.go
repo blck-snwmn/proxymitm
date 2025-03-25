@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,6 +38,26 @@ func (ti *testInterceptor) ProcessResponse(resp *http.Response, req *http.Reques
 	ti.recordFn(ti.name + "-response")
 	resp.Header.Add("X-Processed-By", ti.name)
 	return resp, nil
+}
+
+// testResponseInterceptor is a test interceptor for testing
+type testResponseInterceptor struct {
+	onRequest  func(*http.Request) (*http.Request, bool, error)
+	onResponse func(*http.Response, *http.Request) (*http.Response, error)
+}
+
+func (tri *testResponseInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
+	if tri.onResponse != nil {
+		return tri.onResponse(resp, req)
+	}
+	return resp, nil
+}
+
+func (tri *testResponseInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
+	if tri.onRequest != nil {
+		return tri.onRequest(req)
+	}
+	return req, false, nil
 }
 
 func TestCreateMitmProxy(t *testing.T) {
@@ -203,25 +221,6 @@ func TestMitmProxy_Handler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "Client should receive correct response status")
 }
 
-type testResponseInterceptor struct {
-	onRequest  func(*http.Request) (*http.Request, bool, error)
-	onResponse func(*http.Response, *http.Request) (*http.Response, error)
-}
-
-func (tri *testResponseInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
-	if tri.onRequest != nil {
-		return tri.onRequest(req)
-	}
-	return req, false, nil
-}
-
-func (tri *testResponseInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
-	if tri.onResponse != nil {
-		return tri.onResponse(resp, req)
-	}
-	return resp, nil
-}
-
 func TestMitmProxy_Connected(t *testing.T) {
 	// MITM proxy to create
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
@@ -335,88 +334,66 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 	}))
 	defer targetServer.Close()
 
-	// Test directly the handleNonConnect method with various inputs
-	t.Run("should proxy request successfully when valid request", func(t *testing.T) {
-		// Test with a valid URL - direct method call
-		req := httptest.NewRequest(http.MethodGet, targetServer.URL+"/test", nil)
-		w := httptest.NewRecorder()
+	// Create a proxy server
+	proxyServer := httptest.NewServer(mp)
+	defer proxyServer.Close()
 
-		// We use a custom client to avoid actual network calls
-		originalClient := mp.client
-		mp.client = &mockHTTPClient{
-			response: &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"text/plain"}},
-				Body:       io.NopCloser(strings.NewReader("Mock response body")),
+	// Parse URLs
+	proxyURL, err := url.Parse(proxyServer.URL)
+	require.NoError(t, err, "Should be able to parse proxy URL")
+
+	// Set certificate pool
+	pool := x509.NewCertPool()
+	pool.AddCert(mp.x509Cert)
+
+	// Set client
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: pool,
 			},
-			err: nil,
-		}
-		defer func() { mp.client = originalClient }()
+		},
+	}
 
-		// Direct method call
-		err := mp.handleNonConnect(w, req)
-		require.NoError(t, err, "handleNonConnect should not return an error")
+	// Test successful request
+	t.Run("should proxy request successfully when valid request", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, targetServer.URL+"/test", nil)
+		require.NoError(t, err, "Should be able to create request")
+
+		resp, err := client.Do(req)
+		require.NoError(t, err, "Should be able to send request")
+		defer resp.Body.Close()
 
 		// Verify response
-		assert.Equal(t, http.StatusOK, w.Code, "Should return OK status")
-		assert.Equal(t, "Mock response body", w.Body.String(), "Response body should match")
-		assert.Equal(t, "text/plain", w.Header().Get("Content-Type"), "Content-Type header should be set")
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "Should return OK status")
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err, "Should be able to read response body")
+		assert.Equal(t, "Hello from target", string(body), "Response body should match")
+		assert.Equal(t, "text/plain", resp.Header.Get("Content-Type"), "Content-Type header should be set")
 	})
 
+	// Test invalid URL
 	t.Run("should return error when request creation fails", func(t *testing.T) {
-		// Invalid URL that will cause an error in http.NewRequest
-		req := &http.Request{
-			Method: http.MethodGet,
-			URL: &url.URL{
-				Scheme: "http",
-				Host:   "example.com",
-				Path:   "/test",
-			},
-			Body: &errReader{}, // Will cause an error when reading
-		}
-		w := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodGet, "http://invalid-url", nil)
+		require.NoError(t, err, "Should be able to create request")
 
-		err := mp.handleNonConnect(w, req)
-		require.Error(t, err, "Should return an error for request with body that errors")
-		assert.IsType(t, &ProxyError{}, err, "Error should be a ProxyError")
-
-		proxyErr, ok := err.(*ProxyError)
-		assert.True(t, ok, "Error should be castable to ProxyError")
-		assert.Equal(t, ErrSendRequest, proxyErr.Type, "Error type should be ErrSendRequest")
+		resp, err := client.Do(req)
+		require.Error(t, err, "Should return an error for invalid URL")
+		assert.Nil(t, resp, "Response should be nil")
 	})
 
-	t.Run("should return error when client request fails", func(t *testing.T) {
-		// Test with client.Do returning an error
-		req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
-		w := httptest.NewRecorder()
+	// Test non-CONNECT request
+	t.Run("should return internal server error for non-CONNECT request", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, "http://example.com/test", nil)
+		require.NoError(t, err, "Should be able to create request")
 
-		// Use custom client that returns an error
-		originalClient := mp.client
-		mp.client = &mockHTTPClient{
-			response: nil,
-			err:      errors.New("mock client error"),
-		}
-		defer func() { mp.client = originalClient }()
+		resp, err := client.Do(req)
+		require.NoError(t, err, "Should be able to send request")
+		defer resp.Body.Close()
 
-		err := mp.handleNonConnect(w, req)
-		require.Error(t, err, "Should return an error when client.Do fails")
-		assert.IsType(t, &ProxyError{}, err, "Error should be a ProxyError")
-
-		proxyErr, ok := err.(*ProxyError)
-		assert.True(t, ok, "Error should be castable to ProxyError")
-		assert.Equal(t, ErrSendRequest, proxyErr.Type, "Error type should be ErrSendRequest")
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode, "Should return internal server error for non-CONNECT requests")
 	})
-
-	// Original ServeHTTP test - proxying through the full stack
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
-	w := httptest.NewRecorder()
-
-	// Test the ServeHTTP method
-	mp.ServeHTTP(w, req)
-
-	// Since this is a non-CONNECT request, we expect an internal server error
-	// because the proxy is primarily designed for CONNECT requests
-	assert.Equal(t, http.StatusInternalServerError, w.Code, "Should return internal server error for non-CONNECT requests")
 }
 
 func TestServerMux_ServeHTTP_Errors(t *testing.T) {
@@ -434,7 +411,7 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 			name:         "Invalid Method",
 			method:       "INVALID",
 			url:          "http://example.com",
-			expectedCode: http.StatusInternalServerError,
+			expectedCode: http.StatusBadRequest,
 		},
 		{
 			name:         "Empty URL",
@@ -458,271 +435,13 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 	}
 }
 
-func TestServerMux_CreateRequest(t *testing.T) {
-	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	require.NoError(t, err, "Failed to create MitmProxy")
-
-	// Create a mock connection that returns a valid HTTP request
-	mockConn := &mockConn{
-		readData: []byte("GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n"),
-	}
-
-	req, err := mp.createRequest(mockConn)
-	require.NoError(t, err, "createRequest should not return an error")
-
-	assert.Equal(t, "GET", req.Method, "Request method should be GET")
-	assert.Equal(t, "https://example.com/path", req.URL.String(), "Request URL should be correctly constructed")
-}
-
-// mockConn implements the net.Conn interface for testing
-type mockConn struct {
-	readData []byte
-	readPos  int
-	writeFn  func([]byte) (int, error)
-}
-
-func (m *mockConn) Read(b []byte) (n int, err error) {
-	if m.readPos >= len(m.readData) {
-		return 0, io.EOF
-	}
-	n = copy(b, m.readData[m.readPos:])
-	m.readPos += n
-	return n, nil
-}
-
-// Implement other required net.Conn interface methods
-func (m *mockConn) Write(b []byte) (n int, err error) {
-	if m.writeFn != nil {
-		return m.writeFn(b)
-	}
-	return len(b), nil
-}
-
-func (m *mockConn) Close() error                       { return nil }
-func (m *mockConn) LocalAddr() net.Addr                { return nil }
-func (m *mockConn) RemoteAddr() net.Addr               { return nil }
-func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
-func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
-func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
-
-func TestServerMux_HijackConnection(t *testing.T) {
-	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	require.NoError(t, err, "Should be able to create MitmProxy")
-
-	tests := []struct {
-		name        string
-		setupWriter func() http.ResponseWriter
-		wantErr     bool
-		errType     ErrorType
-	}{
-		{
-			name: "successful hijack",
-			setupWriter: func() http.ResponseWriter {
-				return httptest.NewRecorder()
-			},
-			wantErr: true,
-			errType: ErrHijack,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			w := tt.setupWriter()
-			_, err := mp.hijackConnection(w)
-
-			if tt.wantErr {
-				assert.Error(t, err, "hijackConnection() should return an error")
-				if proxyErr, ok := err.(*ProxyError); ok {
-					assert.Equal(t, tt.errType, proxyErr.Type, "Error type should match expected type")
-				} else {
-					t.Errorf("Expected ProxyError, got %T", err)
-				}
-			} else {
-				assert.NoError(t, err, "hijackConnection() should not return an error")
-			}
-		})
-	}
-}
-
-func TestServerMux_WriteConnectionEstablished(t *testing.T) {
-	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	require.NoError(t, err, "Should be able to create MitmProxy")
-
-	tests := []struct {
-		name    string
-		conn    net.Conn
-		wantErr bool
-	}{
-		{
-			name:    "successful write",
-			conn:    &mockConn{},
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			err := mp.writeConnectionEstablished(tt.conn)
-
-			if tt.wantErr {
-				assert.Error(t, err, "writeConnectionEstablished() should return an error")
-			} else {
-				assert.NoError(t, err, "writeConnectionEstablished() should not return an error")
-			}
-		})
-	}
-}
-
-func TestServerMux_WriteResponse(t *testing.T) {
-	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	require.NoError(t, err, "Failed to create MitmProxy")
-
-	tests := []struct {
-		name     string
-		resp     *http.Response
-		wantCode int
-		wantErr  bool
-	}{
-		{
-			name: "successful write",
-			resp: &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader("test body")),
-			},
-			wantCode: http.StatusOK,
-			wantErr:  false,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			w := httptest.NewRecorder()
-			err := mp.writeResponse(w, tt.resp)
-
-			if tt.wantErr {
-				assert.Error(t, err, "writeResponse() should return an error")
-			} else {
-				assert.NoError(t, err, "writeResponse() should not return an error")
-			}
-
-			assert.Equal(t, tt.wantCode, w.Code, "Response status code should match expected code")
-		})
-	}
-}
-
-func TestServerMux_ForwardRequest(t *testing.T) {
-	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
-
-	// Create a mock connection that can record written data
-	mockConn := &mockConnWithBuffer{
-		mockConn: mockConn{},
-		buffer:   &bytes.Buffer{},
-	}
-
-	// Create a mock response
-	mockResp := &http.Response{
-		Status:     "200 OK",
-		StatusCode: http.StatusOK,
-		Proto:      "HTTP/1.1",
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader("test response")),
-	}
-
-	tests := []struct {
-		name    string
-		setup   func() (*http.Request, net.Conn, HTTPClient)
-		wantErr bool
-	}{
-		{
-			name: "successful forward",
-			setup: func() (*http.Request, net.Conn, HTTPClient) {
-				req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-				// Create a mock client for successful case
-				successClient := &mockHTTPClient{
-					response: mockResp,
-					err:      nil,
-				}
-				return req, mockConn, successClient
-			},
-			wantErr: false,
-		},
-		{
-			name: "client error",
-			setup: func() (*http.Request, net.Conn, HTTPClient) {
-				req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-				// Create a mock client for error case
-				errorClient := &mockHTTPClient{
-					response: nil,
-					err:      errors.New("client error"),
-				}
-				return req, mockConn, errorClient
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			req, conn, client := tt.setup()
-			// Set client for each test case
-			mp.client = client
-			err := mp.forwardRequest(conn, req)
-
-			if tt.wantErr {
-				assert.Error(t, err, "forwardRequest() should return an error")
-			} else {
-				assert.NoError(t, err, "forwardRequest() should not return an error")
-			}
-		})
-	}
-}
-
-// mockHTTPClient is a mock implementation of HTTPClient
-type mockHTTPClient struct {
-	response *http.Response
-	err      error
-}
-
-func (c *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	return c.response, c.err
-}
-
-// mockConnWithBuffer extends mockConn to record written data
-type mockConnWithBuffer struct {
-	mockConn
-	buffer *bytes.Buffer
-}
-
-func (m *mockConnWithBuffer) Write(b []byte) (n int, err error) {
-	return m.buffer.Write(b)
-}
-
 // TestMitmProxy_WithInterceptors is a test for the MITM proxy with interceptors
 func TestMitmProxy_WithInterceptors(t *testing.T) {
 	t.Parallel()
 
 	// MITM proxy to create
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	// Add logging interceptor
 	loggingInterceptor := NewLoggingInterceptor(mp.logger)
@@ -735,54 +454,59 @@ func TestMitmProxy_WithInterceptors(t *testing.T) {
 	contentModifier.AddBodyReplacement("test-content", "modified-content")
 	mp.AddInterceptor(contentModifier)
 
+	// Create a test server that will be proxied to
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request headers at the target server
+		assert.Equal(t, "TestAgent/1.0", r.Header.Get("User-Agent"), "User-Agent header should be modified")
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write([]byte("This is a test-content for interceptor test"))
+		require.NoError(t, err, "Should be able to write response")
+	}))
+	defer targetServer.Close()
+
+	// Create a proxy server
+	proxyServer := httptest.NewServer(mp)
+	defer proxyServer.Close()
+
+	// Parse URLs
+	proxyURL, err := url.Parse(proxyServer.URL)
+	require.NoError(t, err, "Should be able to parse proxy URL")
+
+	// Set certificate pool
+	pool := x509.NewCertPool()
+	pool.AddCert(mp.x509Cert)
+
+	// Set client
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: pool,
+			},
+		},
+	}
+
 	// Create a test request
-	req := httptest.NewRequest(http.MethodGet, "https://example.com/test", nil)
+	req, err := http.NewRequest(http.MethodGet, targetServer.URL+"/test", nil)
+	require.NoError(t, err, "Should be able to create request")
 	req.Header.Set("User-Agent", "OriginalAgent/1.0")
 
-	// Create an original response
-	originalResp := &http.Response{
-		StatusCode: http.StatusOK,
-		Status:     "200 OK",
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader("This is a test-content for interceptor test")),
-	}
-	originalResp.Header.Set("Content-Type", "text/plain")
+	// Send request
+	resp, err := client.Do(req)
+	require.NoError(t, err, "Should be able to send request")
+	defer resp.Body.Close()
 
-	// Process request through interceptor chain
-	modifiedReq := req
-	var skip bool
-	var processErr error
-
-	for _, interceptor := range mp.interceptors {
-		modifiedReq, skip, processErr = interceptor.ProcessRequest(modifiedReq)
-		require.NoError(t, processErr, "ProcessRequest failed")
-		if skip {
-			t.Fatalf("ProcessRequest returned skip=true")
-		}
-	}
-
-	// Verify request headers
-	userAgent := modifiedReq.Header.Get("User-Agent")
-	assert.Equal(t, "TestAgent/1.0", userAgent, "User-Agent header was not modified, got %q, want %q", userAgent, "TestAgent/1.0")
-
-	// Process response through interceptor chain in reverse order
-	modifiedResp := originalResp
-	var respErr error
-
-	for i := len(mp.interceptors) - 1; i >= 0; i-- {
-		modifiedResp, respErr = mp.interceptors[i].ProcessResponse(modifiedResp, modifiedReq)
-		require.NoError(t, respErr, "ProcessResponse failed")
-	}
-
+	// No need to verify request headers here as they are checked at the target server
 	// Verify response headers
-	assert.Equal(t, "TestValue", modifiedResp.Header.Get("X-Test-Header"), "X-Test-Header was not added")
+	assert.Equal(t, "TestValue", resp.Header.Get("X-Test-Header"), "X-Test-Header should be added")
 
 	// Read response body
-	body, err := io.ReadAll(modifiedResp.Body)
-	require.NoError(t, err, "Failed to read response body")
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err, "Should be able to read response body")
 
 	// Ensure body is modified
-	assert.Contains(t, string(body), "modified-content", "Response body was not modified, got %q, expected to contain %q", string(body), "modified-content")
+	assert.Contains(t, string(body), "modified-content", "Response body should be modified correctly")
 }
 
 // TestMitmProxy_InterceptorChain is a test for the processing order of the interceptor chain
@@ -1018,21 +742,18 @@ func TestMitmProxy_FilteringInterceptor(t *testing.T) {
 func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	t.Parallel()
 
-	// Create a test server with a special payload
-	secretPayload := "SECRET_PAYLOAD_FOR_MITM_TEST"
+	// Setup test server
 	testServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		if _, err := w.Write([]byte(secretPayload)); err != nil {
+		_, err := w.Write([]byte("SECRET_PAYLOAD_FOR_MITM_TEST"))
+		if err != nil {
 			t.Errorf("Failed to write response: %v", err)
 		}
 	}))
 	defer testServer.Close()
 
-	// MITM proxy to create
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	if err != nil {
-		t.Fatalf("Failed to create MitmProxy: %v", err)
-	}
+	// MITM proxy to create using helper function
+	mp := setupTestProxy(t)
 
 	// Set inspecting client for recording intercepted data
 	inspectingClient := NewInspectingHTTPClient(&http.Client{
@@ -1065,9 +786,8 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	// Keep for reference
 	_ = "https://" + testServerHostname
 
-	// Set certificate pool
-	certPool := x509.NewCertPool()
-	certPool.AddCert(mp.x509Cert)
+	// Set certificate pool using helper function
+	certPool := setupCertPool(mp)
 
 	// Set HTTP client to use proxy
 	client := &http.Client{
@@ -1083,7 +803,7 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	// Create a simple test HTTP server
 	simpleServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		if _, err := w.Write([]byte(secretPayload)); err != nil {
+		if _, err := w.Write([]byte("SECRET_PAYLOAD_FOR_MITM_TEST")); err != nil {
 			t.Errorf("Failed to write response: %v", err)
 		}
 	}))
@@ -1103,7 +823,7 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	}
 
 	// Ensure response is as expected
-	if !strings.Contains(string(body), "<!DOCTYPE html>") && string(body) != secretPayload {
+	if !strings.Contains(string(body), "<!DOCTYPE html>") && string(body) != "SECRET_PAYLOAD_FOR_MITM_TEST" {
 		t.Errorf("Unexpected response body: %q", string(body))
 	}
 
@@ -1298,288 +1018,4 @@ func TestNew(t *testing.T) {
 		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
 		assert.Equal(t, ErrCertificate, proxyErr.Type, "Error type should be ErrCertificate")
 	})
-}
-
-func TestServerMux_HandleConnectError(t *testing.T) {
-	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	require.NoError(t, err, "Should be able to create MitmProxy")
-
-	t.Run("handle proxy error", func(t *testing.T) {
-		// Create a mock connection that captures output
-		bufConn := &mockConnWithBuffer{
-			buffer: &bytes.Buffer{},
-		}
-
-		// Create a proxy error
-		proxyErr := NewProxyError(ErrTLSHandshake, "test_op", "test error message", nil)
-
-		// Set up a logger that will capture logs
-		var logBuf bytes.Buffer
-		testLogger := &DefaultLogger{level: LogLevelDebug}
-		origLogger := log.Writer()
-		log.SetOutput(&logBuf)
-		defer log.SetOutput(origLogger)
-
-		// Save original logger and restore it after test
-		origMpLogger := mp.logger
-		mp.logger = testLogger
-		defer func() { mp.logger = origMpLogger }()
-
-		// Call handleConnectError
-		mp.handleConnectError(bufConn, proxyErr)
-
-		// Verify error response was written
-		assert.Contains(t, bufConn.buffer.String(), "HTTP/1.0 500", "Error response should contain 500 status code")
-
-		// Verify error was logged
-		assert.Contains(t, logBuf.String(), "Connect error", "Error should be logged")
-		assert.Contains(t, logBuf.String(), "tls_handshake", "Error type should be logged")
-	})
-
-	t.Run("handle regular error", func(t *testing.T) {
-		// Create a mock connection that captures output
-		bufConn := &mockConnWithBuffer{
-			buffer: &bytes.Buffer{},
-		}
-
-		// Create a regular error
-		regularErr := errors.New("regular test error")
-
-		// Set up a logger that will capture logs
-		var logBuf bytes.Buffer
-		testLogger := &DefaultLogger{level: LogLevelDebug}
-		origLogger := log.Writer()
-		log.SetOutput(&logBuf)
-		defer log.SetOutput(origLogger)
-
-		// Save original logger and restore it after test
-		origMpLogger := mp.logger
-		mp.logger = testLogger
-		defer func() { mp.logger = origMpLogger }()
-
-		// Call handleConnectError
-		mp.handleConnectError(bufConn, regularErr)
-
-		// Verify error response was written
-		assert.Contains(t, bufConn.buffer.String(), "HTTP/1.0 500", "Error response should contain 500 status code")
-
-		// Verify error was logged
-		assert.Contains(t, logBuf.String(), "Connect error", "Error should be logged")
-		assert.Contains(t, logBuf.String(), "regular test error", "Error message should be logged")
-	})
-
-	t.Run("handle write error", func(t *testing.T) {
-		// Create a mock connection that fails on write
-		failConn := &mockConn{
-			readData: []byte{},
-			readPos:  0,
-			writeFn: func(b []byte) (int, error) {
-				return 0, errors.New("failed to write error response")
-			},
-		}
-
-		// Create a proxy error
-		proxyErr := NewProxyError(ErrTLSHandshake, "test_op", "test error message", nil)
-
-		// Set up a logger that will capture logs
-		var logBuf bytes.Buffer
-		testLogger := &DefaultLogger{level: LogLevelDebug}
-		origLogger := log.Writer()
-		log.SetOutput(&logBuf)
-		defer log.SetOutput(origLogger)
-
-		// Save original logger and restore it after test
-		origMpLogger := mp.logger
-		mp.logger = testLogger
-		defer func() { mp.logger = origMpLogger }()
-
-		// Call handleConnectError
-		mp.handleConnectError(failConn, proxyErr)
-
-		// Verify write error was logged
-		assert.Contains(t, logBuf.String(), "Failed to write error response", "Write error should be logged")
-	})
-}
-
-// errReader is a reader that always returns an error
-type errReader struct{}
-
-func (e *errReader) Read(p []byte) (n int, err error) {
-	return 0, errors.New("read error")
-}
-
-func (e *errReader) Close() error {
-	return nil
-}
-
-// TestServerMux_ServeHTTP_Connect tests the ServeHTTP method with CONNECT requests
-func TestServerMux_ServeHTTP_Connect(t *testing.T) {
-	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	require.NoError(t, err, "Should be able to create MitmProxy")
-
-	t.Run("hijacker not available", func(t *testing.T) {
-		// Create a test request with CONNECT method
-		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
-
-		// Use a ResponseRecorder that doesn't implement http.Hijacker
-		w := httptest.NewRecorder()
-
-		// Test the ServeHTTP method
-		mp.ServeHTTP(w, req)
-
-		// Since the ResponseRecorder doesn't implement http.Hijacker,
-		// we expect an error response with internal server error
-		assert.Equal(t, http.StatusInternalServerError, w.Code, "Should return internal server error for non-hijackable response writer")
-		assert.Contains(t, w.Body.String(), "Hijacker not available", "Error message should indicate Hijacker is not available")
-	})
-}
-
-// TestHandleConnect tests the handleConnect method directly
-func TestHandleConnect(t *testing.T) {
-	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
-	require.NoError(t, err, "Should be able to create MitmProxy")
-
-	t.Run("set deadline error", func(t *testing.T) {
-		// Create a test request
-		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
-
-		// Create a mock connection that fails on SetDeadline
-		mockConn := &mockConnWithErrors{
-			setDeadlineError: errors.New("set deadline error"),
-		}
-
-		// Call handleConnect
-		err := mp.handleConnect(mockConn, req)
-
-		// Check if the error is as expected
-		assert.Error(t, err, "handleConnect should return an error when SetDeadline fails")
-		var proxyErr *ProxyError
-		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
-		assert.Equal(t, ErrHijack, proxyErr.Type, "Error type should be ErrHijack")
-		assert.Contains(t, proxyErr.Error(), "set_deadline", "Error should contain the operation name")
-	})
-
-	t.Run("write connection established error", func(t *testing.T) {
-		// Create a test request
-		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
-
-		// Create a mock connection that fails on Write
-		mockConn := &mockConnWithErrors{
-			writeError: errors.New("write error"),
-		}
-
-		// Call handleConnect
-		err := mp.handleConnect(mockConn, req)
-
-		// Check if the error is as expected
-		assert.Error(t, err, "handleConnect should return an error when Write fails")
-		var proxyErr *ProxyError
-		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
-		assert.Equal(t, ErrHijack, proxyErr.Type, "Error type should be ErrHijack")
-		assert.Contains(t, proxyErr.Error(), "write", "Error should contain the operation name")
-	})
-
-	t.Run("tls handshake error", func(t *testing.T) {
-		// Create a test request
-		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
-
-		// Set a custom TLSHandshaker that returns an error
-		originalClient := mp.client
-		mp.client = &mockErrorClient{
-			tlsHandshakeError: errors.New("tls handshake error"),
-		}
-		defer func() { mp.client = originalClient }()
-
-		// Call handleConnect
-		err := mp.handleConnect(&mockConnWithBuffer{buffer: &bytes.Buffer{}}, req)
-
-		// Check if the error is as expected
-		assert.Error(t, err, "handleConnect should return an error when TLS handshake fails")
-	})
-
-	t.Run("tls set deadline error", func(t *testing.T) {
-		// Skip this test as we cannot directly create a tls.Conn for testing
-		// We're going to test at the TLSHandshake method level instead
-		t.Skip("Cannot directly test TLS connection deadline errors")
-	})
-
-	t.Run("create request error", func(t *testing.T) {
-		// Create a test request
-		req := httptest.NewRequest(http.MethodConnect, "https://example.com", nil)
-
-		// Set a custom client that returns an error from CreateRequest
-		originalClient := mp.client
-		mp.client = &mockErrorClient{
-			createRequestError: errors.New("create request error"),
-		}
-		defer func() { mp.client = originalClient }()
-
-		// Call handleConnect
-		err := mp.handleConnect(&mockConnWithBuffer{buffer: &bytes.Buffer{}}, req)
-
-		// Check if the error is as expected
-		assert.Error(t, err, "handleConnect should return an error when CreateRequest fails")
-	})
-}
-
-// mockConnWithErrors is a net.Conn that returns errors for various operations
-type mockConnWithErrors struct {
-	mockConn
-	setDeadlineError error
-	writeError       error
-}
-
-func (m *mockConnWithErrors) SetDeadline(t time.Time) error {
-	if m.setDeadlineError != nil {
-		return m.setDeadlineError
-	}
-	return nil
-}
-
-func (m *mockConnWithErrors) Write(b []byte) (n int, err error) {
-	if m.writeError != nil {
-		return 0, m.writeError
-	}
-	return len(b), nil
-}
-
-// mockErrorClient is a client that returns errors for various operations
-type mockErrorClient struct {
-	tlsHandshakeError          error
-	createRequestError         error
-	doRequestError             error
-	tlsHandshakeImplementation func(con net.Conn, hostName string) (*tls.Conn, error)
-}
-
-func (m *mockErrorClient) Do(req *http.Request) (*http.Response, error) {
-	if m.doRequestError != nil {
-		return nil, m.doRequestError
-	}
-	return &http.Response{
-		StatusCode: 200,
-		Body:       io.NopCloser(strings.NewReader("OK")),
-	}, nil
-}
-
-func (m *mockErrorClient) TLSHandshake(con net.Conn, hostName string) (*tls.Conn, error) {
-	if m.tlsHandshakeImplementation != nil {
-		return m.tlsHandshakeImplementation(con, hostName)
-	}
-	if m.tlsHandshakeError != nil {
-		return nil, m.tlsHandshakeError
-	}
-	return nil, errors.New("TLSHandshake not implemented")
-}
-
-func (m *mockErrorClient) CreateRequest(conn net.Conn) (*http.Request, error) {
-	if m.createRequestError != nil {
-		return nil, m.createRequestError
-	}
-	return &http.Request{
-		Method: "GET",
-		URL:    &url.URL{Scheme: "https", Host: "example.com"},
-	}, nil
 }

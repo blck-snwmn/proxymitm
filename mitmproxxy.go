@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -129,17 +130,17 @@ func (mp *ServerMux) AddInterceptor(interceptor HTTPInterceptor) {
 func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mp.logger.Info("Received request: %s %s", r.Method, r.URL.String())
 
-	// Establish TCP connection
-	con, err := mp.hijackConnection(w)
-	if err != nil {
-		mp.handleError(w, err)
-		return
-	}
-	defer con.Close()
-
 	switch r.Method {
 	case http.MethodConnect:
 		mp.logger.Debug("Handling CONNECT request for %s", r.URL.String())
+		// Establish TCP connection for CONNECT requests
+		con, err := mp.hijackConnection(w)
+		if err != nil {
+			mp.handleError(w, err)
+			return
+		}
+		defer con.Close()
+
 		if err := mp.handleConnect(con, r); err != nil {
 			mp.handleConnectError(con, err)
 		}
@@ -207,9 +208,37 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 	}
 	req = req.WithContext(r.Context())
 
+	// Copy headers from original request
+	for k, v := range r.Header {
+		req.Header[k] = v
+	}
+
 	// Make sure to close the request body if it exists
 	if r.Body != nil {
 		defer r.Body.Close()
+	}
+
+	var skipRemaining bool
+
+	// Request interception processing
+	for _, interceptor := range mp.interceptors {
+		mp.logger.Debug("Applying request interceptor: %T", interceptor)
+		if req, skipRemaining, err = interceptor.ProcessRequest(req); err != nil {
+			mp.logger.Error("Interceptor error during request processing: %v", err)
+			return NewProxyError(ErrSendRequest, "interceptor_request", "interceptor failed to process request", err)
+		}
+		if skipRemaining {
+			mp.logger.Debug("Request processing interrupted by interceptor: %T", interceptor)
+			break // Skip subsequent interceptors
+		}
+	}
+
+	// Update original request headers with modified headers
+	for k := range r.Header {
+		r.Header.Del(k)
+	}
+	for k, v := range req.Header {
+		r.Header[k] = v
 	}
 
 	mp.logger.Debug("Sending request to %s", req.URL.String())
@@ -219,8 +248,31 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 	}
 	defer resp.Body.Close()
 
+	// Response interception processing
+	for _, interceptor := range mp.interceptors {
+		mp.logger.Debug("Applying response interceptor: %T", interceptor)
+		if resp, err = interceptor.ProcessResponse(resp, req); err != nil {
+			mp.logger.Error("Interceptor error during response processing: %v", err)
+			return NewProxyError(ErrSendRequest, "interceptor_response", "interceptor failed to process response", err)
+		}
+	}
+
 	mp.logger.Debug("Writing response with status %d", resp.StatusCode)
-	return mp.writeResponse(w, resp)
+
+	// Copy headers
+	for k, v := range resp.Header {
+		w.Header()[k] = v
+	}
+
+	// Write status code
+	w.WriteHeader(resp.StatusCode)
+
+	// Copy body
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		return NewProxyError(ErrSendRequest, "write_body", "failed to write response body", err)
+	}
+
+	return nil
 }
 
 func (mp *ServerMux) writeConnectionEstablished(con net.Conn) error {
@@ -238,8 +290,9 @@ func (mp *ServerMux) writeResponse(w http.ResponseWriter, resp *http.Response) e
 	}
 	w.WriteHeader(resp.StatusCode)
 
-	// Copy body
-	_, err := io.Copy(w, resp.Body)
+	// Copy body using a buffer to avoid memory issues
+	buf := make([]byte, 32*1024) // 32KB buffer
+	_, err := io.CopyBuffer(w, resp.Body, buf)
 	if err != nil {
 		return NewProxyError(ErrSendRequest, "write_response", "failed to write response", err)
 	}
@@ -428,6 +481,26 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {
 		mp.logger.Error("Proxy error: %v", proxyErr)
+		if hijacker, ok := w.(http.Hijacker); ok {
+			if conn, _, err := hijacker.Hijack(); err == nil {
+				defer conn.Close()
+				resp := &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Status:     proxyErr.Message,
+					Proto:      "HTTP/1.1",
+					ProtoMajor: 1,
+					ProtoMinor: 1,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(proxyErr.Message)),
+				}
+				resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
+				resp.Header.Set("Content-Length", strconv.Itoa(len(proxyErr.Message)))
+				if err := resp.Write(conn); err != nil {
+					mp.logger.Error("Failed to write error response: %v", err)
+				}
+				return
+			}
+		}
 		http.Error(w, proxyErr.Message, http.StatusInternalServerError)
 	} else {
 		mp.logger.Error("Internal error: %v", err)
@@ -440,11 +513,25 @@ func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {
 		mp.logger.Error("Connect error: %v", proxyErr)
+		resp := &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Status:     proxyErr.Message,
+			Proto:      "HTTP/1.1",
+			ProtoMajor: 1,
+			ProtoMinor: 1,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(proxyErr.Message)),
+		}
+		resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
+		resp.Header.Set("Content-Length", strconv.Itoa(len(proxyErr.Message)))
+		if err := resp.Write(con); err != nil {
+			mp.logger.Error("Failed to write error response: %v", err)
+		}
 	} else {
 		mp.logger.Error("Connect error: %v", err)
-	}
-	if _, writeErr := con.Write(internalServerError); writeErr != nil {
-		mp.logger.Error("Failed to write error response: %v", writeErr)
+		if _, writeErr := con.Write(internalServerError); writeErr != nil {
+			mp.logger.Error("Failed to write error response: %v", writeErr)
+		}
 	}
 }
 

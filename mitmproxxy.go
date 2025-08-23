@@ -488,6 +488,7 @@ func determineErrorType(err error) ErrorType {
 	
 	// Check for gateway errors (DNS, connection issues)
 	if strings.Contains(errMsg, "no such host") ||
+		strings.Contains(errMsg, "server misbehaving") ||
 		strings.Contains(errMsg, "connection refused") ||
 		strings.Contains(errMsg, "network is unreachable") ||
 		strings.Contains(errMsg, "no route to host") {

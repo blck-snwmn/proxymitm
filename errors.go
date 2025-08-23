@@ -19,6 +19,10 @@ const (
 	ErrSendRequest ErrorType = "send_request"
 	// ErrCertificate is an error that occurs when certificate-related processing fails
 	ErrCertificate ErrorType = "certificate"
+	// ErrGateway is an error that occurs when the proxy cannot reach the upstream server (502 Bad Gateway)
+	ErrGateway ErrorType = "gateway"
+	// ErrTimeout is an error that occurs when the upstream server doesn't respond in time (504 Gateway Timeout)
+	ErrTimeout ErrorType = "timeout"
 )
 
 // ProxyError represents an error that occurs during proxy processing

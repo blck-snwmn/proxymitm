@@ -244,7 +244,8 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 	mp.logger.Debug("Sending request to %s", req.URL.String())
 	resp, err := mp.client.Do(req)
 	if err != nil {
-		return NewProxyError(ErrSendRequest, "do_request", "failed to send request", err)
+		errorType := determineErrorType(err)
+		return NewProxyError(errorType, "do_request", "failed to send request", err)
 	}
 	defer resp.Body.Close()
 
@@ -324,7 +325,8 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 	mp.logger.Debug("Sending request to %s", req.URL.String())
 	resp, err := mp.client.Do(req)
 	if err != nil {
-		return NewProxyError(ErrSendRequest, "do_request", "failed to send request", err)
+		errorType := determineErrorType(err)
+		return NewProxyError(errorType, "do_request", "failed to send request", err)
 	}
 	defer resp.Body.Close()
 
@@ -476,17 +478,54 @@ func (mp *ServerMux) CreateRequest(conn net.Conn) (*http.Request, error) {
 	return mp.createRequest(conn)
 }
 
+// determineErrorType determines the appropriate ErrorType based on the error message
+func determineErrorType(err error) ErrorType {
+	if err == nil {
+		return ErrSendRequest
+	}
+	
+	errMsg := err.Error()
+	
+	// Check for gateway errors (DNS, connection issues)
+	if strings.Contains(errMsg, "no such host") ||
+		strings.Contains(errMsg, "connection refused") ||
+		strings.Contains(errMsg, "network is unreachable") ||
+		strings.Contains(errMsg, "no route to host") {
+		return ErrGateway
+	}
+	
+	// Check for timeout errors
+	if strings.Contains(errMsg, "timeout") ||
+		strings.Contains(errMsg, "deadline exceeded") {
+		return ErrTimeout
+	}
+	
+	// Default to send request error
+	return ErrSendRequest
+}
+
 // handleError provides unified error handling
 func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {
 		mp.logger.Error("Proxy error: %v", proxyErr)
+
+		// Determine the appropriate status code based on error type
+		statusCode := http.StatusInternalServerError // Default to 500
+		switch proxyErr.Type {
+		case ErrGateway:
+			statusCode = http.StatusBadGateway // 502
+		case ErrTimeout:
+			statusCode = http.StatusGatewayTimeout // 504
+		// ErrSendRequest and others default to 500
+		}
+
 		if hijacker, ok := w.(http.Hijacker); ok {
 			if conn, _, err := hijacker.Hijack(); err == nil {
 				defer conn.Close()
 				resp := &http.Response{
-					StatusCode: http.StatusInternalServerError,
-					Status:     proxyErr.Message,
+					StatusCode: statusCode,
+					Status:     http.StatusText(statusCode),
 					Proto:      "HTTP/1.1",
 					ProtoMajor: 1,
 					ProtoMinor: 1,
@@ -501,7 +540,7 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 				return
 			}
 		}
-		http.Error(w, proxyErr.Message, http.StatusInternalServerError)
+		http.Error(w, proxyErr.Message, statusCode)
 	} else {
 		mp.logger.Error("Internal error: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -513,9 +552,20 @@ func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {
 		mp.logger.Error("Connect error: %v", proxyErr)
+
+		// Determine the appropriate status code based on error type
+		statusCode := http.StatusInternalServerError // Default to 500
+		switch proxyErr.Type {
+		case ErrGateway:
+			statusCode = http.StatusBadGateway // 502
+		case ErrTimeout:
+			statusCode = http.StatusGatewayTimeout // 504
+		// ErrSendRequest and others default to 500
+		}
+
 		resp := &http.Response{
-			StatusCode: http.StatusInternalServerError,
-			Status:     proxyErr.Message,
+			StatusCode: statusCode,
+			Status:     http.StatusText(statusCode),
 			Proto:      "HTTP/1.1",
 			ProtoMajor: 1,
 			ProtoMinor: 1,

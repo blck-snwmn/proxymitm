@@ -374,7 +374,7 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 	})
 
 	// Test invalid URL - this test expects the proxy to handle DNS resolution failures
-	t.Run("should return internal server error for DNS resolution failure", func(t *testing.T) {
+	t.Run("should return bad gateway for DNS resolution failure", func(t *testing.T) {
 		req, err := http.NewRequest(http.MethodGet, "http://invalid-url-that-does-not-exist.local", nil)
 		require.NoError(t, err, "Should be able to create request")
 
@@ -383,8 +383,8 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 		require.NoError(t, err, "Should be able to send request")
 		defer resp.Body.Close()
 
-		// The proxy returns 500 when it can't resolve the hostname
-		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode, "Should return 500 for unresolvable hostnames")
+		// The proxy returns 502 when it can't resolve the hostname
+		assert.Equal(t, http.StatusBadGateway, resp.StatusCode, "Should return 502 for unresolvable hostnames")
 	})
 
 	// Test non-CONNECT request - the proxy returns 500 for invalid scheme requests
@@ -1023,4 +1023,65 @@ func TestNew(t *testing.T) {
 		require.True(t, errors.As(err, &proxyErr), "Error should be a ProxyError")
 		assert.Equal(t, ErrCertificate, proxyErr.Type, "Error type should be ErrCertificate")
 	})
+}
+
+// TestDetermineErrorType tests the error type determination logic
+func TestDetermineErrorType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		err          error
+		expectedType ErrorType
+	}{
+		{
+			name:         "DNS resolution failure",
+			err:          errors.New("dial tcp: lookup example.com: no such host"),
+			expectedType: ErrGateway,
+		},
+		{
+			name:         "Connection refused",
+			err:          errors.New("dial tcp 127.0.0.1:8080: connection refused"),
+			expectedType: ErrGateway,
+		},
+		{
+			name:         "Network unreachable",
+			err:          errors.New("dial tcp: network is unreachable"),
+			expectedType: ErrGateway,
+		},
+		{
+			name:         "No route to host",
+			err:          errors.New("dial tcp: no route to host"),
+			expectedType: ErrGateway,
+		},
+		{
+			name:         "Timeout error",
+			err:          errors.New("dial tcp: i/o timeout"),
+			expectedType: ErrTimeout,
+		},
+		{
+			name:         "Deadline exceeded",
+			err:          errors.New("context deadline exceeded"),
+			expectedType: ErrTimeout,
+		},
+		{
+			name:         "Generic error",
+			err:          errors.New("some other error"),
+			expectedType: ErrSendRequest,
+		},
+		{
+			name:         "Nil error",
+			err:          nil,
+			expectedType: ErrSendRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := determineErrorType(tt.err)
+			assert.Equal(t, tt.expectedType, result, "Error type should match expected")
+		})
+	}
 }

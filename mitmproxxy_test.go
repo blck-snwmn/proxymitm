@@ -859,7 +859,7 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 
 // TestDefaultLogger tests the logger implementation
 func TestDefaultLogger(t *testing.T) {
-	t.Parallel()
+	// Don't run in parallel - modifies global log output
 
 	tests := []struct {
 		name      string

@@ -284,22 +284,6 @@ func (mp *ServerMux) writeConnectionEstablished(con net.Conn) error {
 	return nil
 }
 
-func (mp *ServerMux) writeResponse(w http.ResponseWriter, resp *http.Response) error {
-	// Copy headers
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-
-	// Copy body using a buffer to avoid memory issues
-	buf := make([]byte, 32*1024) // 32KB buffer
-	_, err := io.CopyBuffer(w, resp.Body, buf)
-	if err != nil {
-		return NewProxyError(ErrSendRequest, "write_response", "failed to write response", err)
-	}
-	return nil
-}
-
 func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 	// Make sure to close the request body if it exists
 	if req.Body != nil {

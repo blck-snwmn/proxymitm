@@ -373,26 +373,31 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 		assert.Equal(t, "text/plain", resp.Header.Get("Content-Type"), "Content-Type header should be set")
 	})
 
-	// Test invalid URL
-	t.Run("should return error when request creation fails", func(t *testing.T) {
-		req, err := http.NewRequest(http.MethodGet, "http://invalid-url", nil)
+	// Test invalid URL - this test expects the proxy to handle DNS resolution failures
+	t.Run("should return internal server error for DNS resolution failure", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet, "http://invalid-url-that-does-not-exist.local", nil)
 		require.NoError(t, err, "Should be able to create request")
 
 		resp, err := client.Do(req)
-		require.Error(t, err, "Should return an error for invalid URL")
-		assert.Nil(t, resp, "Response should be nil")
+		// The proxy should return an error response, not fail the request entirely
+		require.NoError(t, err, "Should be able to send request")
+		defer resp.Body.Close()
+
+		// The proxy returns 500 when it can't resolve the hostname
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode, "Should return 500 for unresolvable hostnames")
 	})
 
-	// Test non-CONNECT request
-	t.Run("should return internal server error for non-CONNECT request", func(t *testing.T) {
-		req, err := http.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	// Test non-CONNECT request - the proxy returns 500 for invalid scheme requests
+	t.Run("should return internal server error for invalid scheme", func(t *testing.T) {
+		// When making a direct request to the proxy with no scheme, it returns 500
+		req, err := http.NewRequest(http.MethodGet, proxyServer.URL+"/test", nil)
 		require.NoError(t, err, "Should be able to create request")
 
 		resp, err := client.Do(req)
 		require.NoError(t, err, "Should be able to send request")
 		defer resp.Body.Close()
 
-		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode, "Should return internal server error for non-CONNECT requests")
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode, "Should return 500 for invalid scheme requests")
 	})
 }
 

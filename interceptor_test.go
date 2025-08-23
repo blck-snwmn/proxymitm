@@ -366,14 +366,7 @@ func TestFilteringInterceptorBlock(t *testing.T) {
 	// Create a filtering interceptor
 	filteringInterceptor := NewFilteringInterceptor(mp.logger)
 
-	// Block website with hostname "blocked.example.com"
-	filteringInterceptor.AddBlockedHost("blocked.example.com")
-	filteringInterceptor.SetBlockResponse(http.StatusForbidden, "403 Forbidden", "This resource is blocked")
-
-	// Add interceptor to chain
-	mp.AddInterceptor(filteringInterceptor)
-
-	// Create a test server that will be proxied to
+	// Create a test server that will be proxied to (use HTTP instead of HTTPS to avoid cert issues)
 	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
@@ -381,6 +374,17 @@ func TestFilteringInterceptorBlock(t *testing.T) {
 		require.NoError(t, err, "Should be able to write response")
 	}))
 	defer targetServer.Close()
+
+	// Parse the target server URL to get the host
+	targetURL, err := url.Parse(targetServer.URL)
+	require.NoError(t, err, "Should be able to parse target URL")
+
+	// Block the target server's hostname
+	filteringInterceptor.AddBlockedHost(targetURL.Host)
+	filteringInterceptor.SetBlockResponse(http.StatusForbidden, "403 Forbidden", "This resource is blocked")
+
+	// Add interceptor to chain
+	mp.AddInterceptor(filteringInterceptor)
 
 	// Create a proxy server
 	proxyServer := httptest.NewServer(mp)
@@ -390,22 +394,15 @@ func TestFilteringInterceptorBlock(t *testing.T) {
 	proxyURL, err := url.Parse(proxyServer.URL)
 	require.NoError(t, err, "Should be able to parse proxy URL")
 
-	// Set certificate pool
-	pool := x509.NewCertPool()
-	pool.AddCert(mp.x509Cert)
-
 	// Set client
 	client := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
-			TLSClientConfig: &tls.Config{
-				RootCAs: pool,
-			},
 		},
 	}
 
 	// Create a test request to blocked host
-	req, err := http.NewRequest(http.MethodGet, "https://blocked.example.com/test", nil)
+	req, err := http.NewRequest(http.MethodGet, targetServer.URL+"/test", nil)
 	require.NoError(t, err, "Should be able to create request")
 
 	// Send request

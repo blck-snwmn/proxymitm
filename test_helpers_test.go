@@ -9,7 +9,7 @@ import (
 
 // setupTestProxy creates a MitmProxy for testing purposes
 func setupTestProxy(t testing.TB) *ServerMux {
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	require.NoError(t, err, "Should be able to create MitmProxy")
 	return mp
 }

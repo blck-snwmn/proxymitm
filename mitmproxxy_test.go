@@ -6,7 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,7 +22,7 @@ import (
 // testInterceptor is a HTTP interceptor for testing
 type testInterceptor struct {
 	name     string
-	logger   Logger
+	logger   *slog.Logger
 	recordFn func(string)
 }
 
@@ -62,15 +62,15 @@ func (tri *testResponseInterceptor) ProcessRequest(req *http.Request) (*http.Req
 
 func TestCreateMitmProxy(t *testing.T) {
 	t.Run("should return error when files do not exist", func(t *testing.T) {
-		_, err := CreateMitmProxy("", "")
+		_, err := CreateMitmProxy("", "", nil)
 		assert.Error(t, err, "Should return an error when files don't exist")
 	})
 	t.Run("should return error when invalid pem file", func(t *testing.T) {
-		_, err := CreateMitmProxy("./testdata/a.cert", "./testdata/ca.key")
+		_, err := CreateMitmProxy("./testdata/a.cert", "./testdata/ca.key", nil)
 		assert.Error(t, err, "Should return an error when file is not a valid PEM")
 	})
 	t.Run("should create proxy successfully when valid cert and key", func(t *testing.T) {
-		mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+		mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 		require.NoError(t, err, "CreateMitmProxy() should not return an error")
 
 		assert.Greater(t, len(mp.tlsCert.Certificate), 0, "mp.tlsCert should have at least one Certificate")
@@ -91,7 +91,7 @@ func Test_createX509Certificate(t *testing.T) {
 		{name: "should create valid certificate when hostname is localhost", args: args{hostName: "localhost"}, wantErr: false},
 		{name: "should create valid certificate when hostname is external", args: args{hostName: "www.google.com"}, wantErr: false},
 	}
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	for _, tt := range tests {
@@ -130,7 +130,7 @@ func TestMitmx509template(t *testing.T) {
 func TestMitmProxy_Handler(t *testing.T) {
 	t.Parallel()
 	// MITM proxy to create
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	var requestReceived bool
@@ -223,7 +223,7 @@ func TestMitmProxy_Handler(t *testing.T) {
 
 func TestMitmProxy_Connected(t *testing.T) {
 	// MITM proxy to create
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	if err != nil {
 		t.Fatalf("Failed to create MitmProxy: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestMitmProxy_Connected(t *testing.T) {
 
 func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	// Create a test server that will be proxied to
@@ -403,7 +403,7 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 
 func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 	t.Parallel()
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	tests := []struct {
@@ -445,7 +445,7 @@ func TestMitmProxy_WithInterceptors(t *testing.T) {
 	t.Parallel()
 
 	// MITM proxy to create
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	// Add logging interceptor
@@ -530,12 +530,12 @@ func TestMitmProxy_InterceptorChain(t *testing.T) {
 	}
 
 	// Test interceptor
-	interceptor1 := &testInterceptor{name: "interceptor1", logger: NewDefaultLogger(LogLevelDebug), recordFn: recordProcessing}
-	interceptor2 := &testInterceptor{name: "interceptor2", logger: NewDefaultLogger(LogLevelDebug), recordFn: recordProcessing}
-	interceptor3 := &testInterceptor{name: "interceptor3", logger: NewDefaultLogger(LogLevelDebug), recordFn: recordProcessing}
+	interceptor1 := &testInterceptor{name: "interceptor1", logger: slog.Default(), recordFn: recordProcessing}
+	interceptor2 := &testInterceptor{name: "interceptor2", logger: slog.Default(), recordFn: recordProcessing}
+	interceptor3 := &testInterceptor{name: "interceptor3", logger: slog.Default(), recordFn: recordProcessing}
 
 	// MITM proxy to create
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	if err != nil {
 		t.Fatalf("Failed to create MitmProxy: %v", err)
 	}
@@ -611,7 +611,7 @@ func TestMitmProxy_FilteringInterceptor(t *testing.T) {
 	t.Parallel()
 
 	// MITM proxy to create
-	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key")
+	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	if err != nil {
 		t.Fatalf("Failed to create MitmProxy: %v", err)
 	}
@@ -857,55 +857,55 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	}
 }
 
-// TestDefaultLogger tests the logger implementation
-func TestDefaultLogger(t *testing.T) {
-	// Don't run in parallel - modifies global log output
+// TestSlogLogger tests the slog logger implementation
+func TestSlogLogger(t *testing.T) {
+	t.Parallel()
 
 	tests := []struct {
 		name      string
-		level     LogLevel
+		level     slog.Level
 		logType   string
 		shouldLog bool
 	}{
 		{
 			name:      "debug logs when level is debug",
-			level:     LogLevelDebug,
+			level:     slog.LevelDebug,
 			logType:   "debug",
 			shouldLog: true,
 		},
 		{
 			name:      "info logs when level is debug",
-			level:     LogLevelDebug,
+			level:     slog.LevelDebug,
 			logType:   "info",
 			shouldLog: true,
 		},
 		{
 			name:      "warn logs when level is debug",
-			level:     LogLevelDebug,
+			level:     slog.LevelDebug,
 			logType:   "warn",
 			shouldLog: true,
 		},
 		{
 			name:      "warn logs when level is info",
-			level:     LogLevelInfo,
+			level:     slog.LevelInfo,
 			logType:   "warn",
 			shouldLog: true,
 		},
 		{
 			name:      "warn logs when level is warn",
-			level:     LogLevelWarn,
+			level:     slog.LevelWarn,
 			logType:   "warn",
 			shouldLog: true,
 		},
 		{
 			name:      "warn does not log when level is error",
-			level:     LogLevelError,
+			level:     slog.LevelError,
 			logType:   "warn",
 			shouldLog: false,
 		},
 		{
 			name:      "error logs when level is error",
-			level:     LogLevelError,
+			level:     slog.LevelError,
 			logType:   "error",
 			shouldLog: true,
 		},
@@ -913,16 +913,13 @@ func TestDefaultLogger(t *testing.T) {
 
 	for _, tc := range tests {
 		tc := tc
-		// Don't run tests in parallel due to global log writer setting
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Set up a separate logger output for testing
-			// Important: We need to direct standard log output to our buffer
 			var buf bytes.Buffer
-			origOutput := log.Writer()
-			log.SetOutput(&buf)
-			defer log.SetOutput(origOutput)
-
-			logger := NewDefaultLogger(tc.level)
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+				Level: tc.level,
+			}))
 
 			// Call log method based on type
 			msg := "test message from " + tc.name
@@ -940,21 +937,21 @@ func TestDefaultLogger(t *testing.T) {
 			gotOutput := buf.String()
 
 			if tc.shouldLog {
-				// Expected format is like: 2022/01/01 12:00:00 [INFO] message
-				expectedPrefix := ""
+				// Check that the expected log level appears in the output
+				expectedLevel := ""
 				switch tc.logType {
 				case "debug":
-					expectedPrefix = "[DEBUG]"
+					expectedLevel = "level=DEBUG"
 				case "info":
-					expectedPrefix = "[INFO]"
+					expectedLevel = "level=INFO"
 				case "warn":
-					expectedPrefix = "[WARN]"
+					expectedLevel = "level=WARN"
 				case "error":
-					expectedPrefix = "[ERROR]"
+					expectedLevel = "level=ERROR"
 				}
 
-				if !strings.Contains(gotOutput, expectedPrefix) {
-					t.Errorf("Expected log to contain %q but got: %q", expectedPrefix, gotOutput)
+				if !strings.Contains(gotOutput, expectedLevel) {
+					t.Errorf("Expected log to contain %q but got: %q", expectedLevel, gotOutput)
 				}
 				if !strings.Contains(gotOutput, msg) {
 					t.Errorf("Expected log to contain message %q but got: %q", msg, gotOutput)
@@ -970,7 +967,7 @@ func TestNew(t *testing.T) {
 	t.Parallel()
 
 	t.Run("successful server creation", func(t *testing.T) {
-		server, err := New("./testdata/ca.crt", "./testdata/ca.key")
+		server, err := New("./testdata/ca.crt", "./testdata/ca.key", nil)
 		require.NoError(t, err, "Should be able to create HTTP server")
 		require.NotNil(t, server, "Server should not be nil")
 
@@ -986,7 +983,7 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("invalid certificate path", func(t *testing.T) {
-		server, err := New("./testdata/nonexistent.crt", "./testdata/ca.key")
+		server, err := New("./testdata/nonexistent.crt", "./testdata/ca.key", nil)
 		require.Error(t, err, "Should return an error for invalid certificate path")
 		assert.Nil(t, server, "Server should be nil")
 
@@ -996,7 +993,7 @@ func TestNew(t *testing.T) {
 	})
 
 	t.Run("invalid key path", func(t *testing.T) {
-		server, err := New("./testdata/ca.crt", "./testdata/nonexistent.key")
+		server, err := New("./testdata/ca.crt", "./testdata/nonexistent.key", nil)
 		assert.Error(t, err, "Should return an error for invalid key path")
 		assert.Nil(t, server, "Server should be nil")
 
@@ -1015,7 +1012,7 @@ func TestNew(t *testing.T) {
 		require.NoError(t, err, "Should be able to write to temp file")
 		require.NoError(t, tempFile.Close(), "Should be able to close temp file")
 
-		server, err := New(tempFile.Name(), "./testdata/ca.key")
+		server, err := New(tempFile.Name(), "./testdata/ca.key", nil)
 		assert.Error(t, err, "Should return an error for invalid certificate format")
 		assert.Nil(t, server, "Server should be nil")
 

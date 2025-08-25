@@ -9,7 +9,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -54,22 +56,22 @@ type ServerMux struct {
 	readTimeout  time.Duration
 	writeTimeout time.Duration
 	idleTimeout  time.Duration
-	logger       Logger
+	logger       *slog.Logger
 	interceptors []HTTPInterceptor
 }
 
 // AddInterceptor adds an interceptor to the list
 func (mp *ServerMux) AddInterceptor(interceptor HTTPInterceptor) {
 	mp.interceptors = append(mp.interceptors, interceptor)
-	mp.logger.Info("Added interceptor: %T", interceptor)
+	mp.logger.Info("Added interceptor", "type", fmt.Sprintf("%T", interceptor))
 }
 
 func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	mp.logger.Info("Received request: %s %s", r.Method, r.URL.String())
+	mp.logger.Info("Received request", "method", r.Method, "url", r.URL.String())
 
 	switch r.Method {
 	case http.MethodConnect:
-		mp.logger.Debug("Handling CONNECT request for %s", r.URL.String())
+		mp.logger.Debug("Handling CONNECT request", "url", r.URL.String())
 		// Establish TCP connection for CONNECT requests
 		con, err := mp.hijackConnection(w)
 		if err != nil {
@@ -82,7 +84,7 @@ func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			mp.handleConnectError(con, err)
 		}
 	default:
-		mp.logger.Debug("Handling non-CONNECT request for %s", r.URL.String())
+		mp.logger.Debug("Handling non-CONNECT request", "url", r.URL.String())
 		if err := mp.handleNonConnect(w, r); err != nil {
 			mp.handleError(w, err)
 		}
@@ -107,13 +109,13 @@ func (mp *ServerMux) handleConnect(con net.Conn, r *http.Request) error {
 		return NewProxyError(ErrHijack, "set_deadline", "failed to set connection deadline", err)
 	}
 
-	mp.logger.Debug("Writing connection established for %s", r.URL.String())
+	mp.logger.Debug("Writing connection established", "url", r.URL.String())
 	if err := mp.writeConnectionEstablished(con); err != nil {
 		return err
 	}
 
 	// TLS handshake with client
-	mp.logger.Debug("Starting TLS handshake with %s", r.URL.Hostname())
+	mp.logger.Debug("Starting TLS handshake", "hostname", r.URL.Hostname())
 	tlsConn, err := mp.TLSHandshake(con, r.URL.Hostname())
 	if err != nil {
 		return err
@@ -133,12 +135,12 @@ func (mp *ServerMux) handleConnect(con net.Conn, r *http.Request) error {
 		return err
 	}
 
-	mp.logger.Debug("Forwarding request to %s", req.URL.String())
+	mp.logger.Debug("Forwarding request", "url", req.URL.String())
 	return mp.forwardRequest(tlsConn, req.WithContext(r.Context()))
 }
 
 func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) error {
-	mp.logger.Debug("Creating new request for %s %s", r.Method, r.URL.String())
+	mp.logger.Debug("Creating new request", "method", r.Method, "url", r.URL.String())
 	req, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
 	if err != nil {
 		return NewProxyError(ErrCreateRequest, "new_request", "failed to create request", err)
@@ -159,13 +161,13 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 
 	// Request interception processing
 	for _, interceptor := range mp.interceptors {
-		mp.logger.Debug("Applying request interceptor: %T", interceptor)
+		mp.logger.Debug("Applying request interceptor", "type", fmt.Sprintf("%T", interceptor))
 		if req, skipRemaining, err = interceptor.ProcessRequest(req); err != nil {
-			mp.logger.Error("Interceptor error during request processing: %v", err)
+			mp.logger.Error("Interceptor error during request processing", "error", err)
 			return NewProxyError(ErrSendRequest, "interceptor_request", "interceptor failed to process request", err)
 		}
 		if skipRemaining {
-			mp.logger.Debug("Request processing interrupted by interceptor: %T", interceptor)
+			mp.logger.Debug("Request processing interrupted by interceptor", "type", fmt.Sprintf("%T", interceptor))
 			break // Skip subsequent interceptors
 		}
 	}
@@ -178,7 +180,7 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 		r.Header[k] = v
 	}
 
-	mp.logger.Debug("Sending request to %s", req.URL.String())
+	mp.logger.Debug("Sending request", "url", req.URL.String())
 	resp, err := mp.client.Do(req)
 	if err != nil {
 		errorType := determineErrorType(err)
@@ -188,14 +190,14 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 
 	// Response interception processing
 	for _, interceptor := range mp.interceptors {
-		mp.logger.Debug("Applying response interceptor: %T", interceptor)
+		mp.logger.Debug("Applying response interceptor", "type", fmt.Sprintf("%T", interceptor))
 		if resp, err = interceptor.ProcessResponse(resp, req); err != nil {
-			mp.logger.Error("Interceptor error during response processing: %v", err)
+			mp.logger.Error("Interceptor error during response processing", "error", err)
 			return NewProxyError(ErrSendRequest, "interceptor_response", "interceptor failed to process response", err)
 		}
 	}
 
-	mp.logger.Debug("Writing response with status %d", resp.StatusCode)
+	mp.logger.Debug("Writing response", "status", resp.StatusCode)
 
 	// Copy headers
 	for k, v := range resp.Header {
@@ -232,18 +234,18 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 
 	// Request interception processing
 	for _, interceptor := range mp.interceptors {
-		mp.logger.Debug("Applying request interceptor: %T", interceptor)
+		mp.logger.Debug("Applying request interceptor", "type", fmt.Sprintf("%T", interceptor))
 		if req, skipRemaining, err = interceptor.ProcessRequest(req); err != nil {
-			mp.logger.Error("Interceptor error during request processing: %v", err)
+			mp.logger.Error("Interceptor error during request processing", "error", err)
 			return NewProxyError(ErrSendRequest, "interceptor_request", "interceptor failed to process request", err)
 		}
 		if skipRemaining {
-			mp.logger.Debug("Request processing interrupted by interceptor: %T", interceptor)
+			mp.logger.Debug("Request processing interrupted by interceptor", "type", fmt.Sprintf("%T", interceptor))
 			break // Skip subsequent interceptors
 		}
 	}
 
-	mp.logger.Debug("Sending request to %s", req.URL.String())
+	mp.logger.Debug("Sending request", "url", req.URL.String())
 	resp, err := mp.client.Do(req)
 	if err != nil {
 		errorType := determineErrorType(err)
@@ -253,14 +255,14 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 
 	// Response interception processing
 	for _, interceptor := range mp.interceptors {
-		mp.logger.Debug("Applying response interceptor: %T", interceptor)
+		mp.logger.Debug("Applying response interceptor", "type", fmt.Sprintf("%T", interceptor))
 		if resp, err = interceptor.ProcessResponse(resp, req); err != nil {
-			mp.logger.Error("Interceptor error during response processing: %v", err)
+			mp.logger.Error("Interceptor error during response processing", "error", err)
 			return NewProxyError(ErrSendRequest, "interceptor_response", "interceptor failed to process response", err)
 		}
 	}
 
-	mp.logger.Debug("Writing response with status %d", resp.StatusCode)
+	mp.logger.Debug("Writing response", "status", resp.StatusCode)
 	writer := io.MultiWriter(conn, os.Stdout)
 	if err := resp.Write(writer); err != nil {
 		return NewProxyError(ErrSendRequest, "write_response", "failed to write response", err)
@@ -268,7 +270,7 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 	return nil
 }
 
-func New(certPath, keyPath string) (*http.Server, error) {
+func New(certPath, keyPath string, logger *slog.Logger) (*http.Server, error) {
 	// Load the certificate of the custom certificate authority
 	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
@@ -280,6 +282,10 @@ func New(certPath, keyPath string) (*http.Server, error) {
 		return nil, NewProxyError(ErrCertificate, "parse_cert", "failed to parse certificate", err)
 	}
 
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	mux := &ServerMux{
 		tlsCert:      tlsCert,
 		x509Cert:     x509Cert,
@@ -287,7 +293,7 @@ func New(certPath, keyPath string) (*http.Server, error) {
 		readTimeout:  DefaultReadTimeout,
 		writeTimeout: DefaultWriteTimeout,
 		idleTimeout:  DefaultIdleTimeout,
-		logger:       NewDefaultLogger(LogLevelInfo),
+		logger:       logger,
 		interceptors: make([]HTTPInterceptor, 0),
 	}
 
@@ -314,7 +320,7 @@ func mitmx509template(hostName string) *x509.Certificate {
 }
 
 // CreateMitmProxy load pem, and then it return MitmProxy
-func CreateMitmProxy(certPath, keyPath string) (*ServerMux, error) {
+func CreateMitmProxy(certPath, keyPath string, logger *slog.Logger) (*ServerMux, error) {
 	// Load the certificate of the custom certificate authority
 	tlsCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
@@ -325,6 +331,11 @@ func CreateMitmProxy(certPath, keyPath string) (*ServerMux, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &ServerMux{
 		tlsCert:      tlsCert,
 		x509Cert:     x509Cert,
@@ -332,7 +343,7 @@ func CreateMitmProxy(certPath, keyPath string) (*ServerMux, error) {
 		readTimeout:  DefaultReadTimeout,
 		writeTimeout: DefaultWriteTimeout,
 		idleTimeout:  DefaultIdleTimeout,
-		logger:       NewDefaultLogger(LogLevelInfo),
+		logger:       logger,
 		interceptors: make([]HTTPInterceptor, 0),
 	}, nil
 }
@@ -430,7 +441,7 @@ func determineErrorType(err error) ErrorType {
 func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {
-		mp.logger.Error("Proxy error: %v", proxyErr)
+		mp.logger.Error("Proxy error", "error", proxyErr)
 
 		// Determine the appropriate status code based on error type
 		statusCode := http.StatusInternalServerError // Default to 500
@@ -457,14 +468,14 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 				resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
 				resp.Header.Set("Content-Length", strconv.Itoa(len(proxyErr.Message)))
 				if err := resp.Write(conn); err != nil {
-					mp.logger.Error("Failed to write error response: %v", err)
+					mp.logger.Error("Failed to write error response", "error", err)
 				}
 				return
 			}
 		}
 		http.Error(w, proxyErr.Message, statusCode)
 	} else {
-		mp.logger.Error("Internal error: %v", err)
+		mp.logger.Error("Internal error", "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
 }
@@ -473,7 +484,7 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
 	var proxyErr *ProxyError
 	if errors.As(err, &proxyErr) {
-		mp.logger.Error("Connect error: %v", proxyErr)
+		mp.logger.Error("Connect error", "error", proxyErr)
 
 		// Determine the appropriate status code based on error type
 		statusCode := http.StatusInternalServerError // Default to 500
@@ -497,12 +508,12 @@ func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
 		resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
 		resp.Header.Set("Content-Length", strconv.Itoa(len(proxyErr.Message)))
 		if err := resp.Write(con); err != nil {
-			mp.logger.Error("Failed to write error response: %v", err)
+			mp.logger.Error("Failed to write error response", "error", err)
 		}
 	} else {
-		mp.logger.Error("Connect error: %v", err)
+		mp.logger.Error("Connect error", "error", err)
 		if _, writeErr := con.Write(internalServerError); writeErr != nil {
-			mp.logger.Error("Failed to write error response: %v", writeErr)
+			mp.logger.Error("Failed to write error response", "error", writeErr)
 		}
 	}
 }

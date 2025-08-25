@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	server, err := proxymitm.New("./testdata/ca.crt", "./testdata/ca.key")
+	server, err := proxymitm.New("./testdata/ca.crt", "./testdata/ca.key", nil)
 	if err != nil {
 		log.Fatal(err)
 		return

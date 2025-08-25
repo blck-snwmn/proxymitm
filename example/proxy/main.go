@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/blck-snwmn/proxymitm"
 )
@@ -18,23 +20,25 @@ func main() {
 	flag.Parse()
 
 	// Set log level
-	var level proxymitm.LogLevel
+	var level slog.Level
 	switch *logLevel {
 	case "debug":
-		level = proxymitm.LogLevelDebug
+		level = slog.LevelDebug
 	case "info":
-		level = proxymitm.LogLevelInfo
+		level = slog.LevelInfo
 	case "warn":
-		level = proxymitm.LogLevelWarn
+		level = slog.LevelWarn
 	case "error":
-		level = proxymitm.LogLevelError
+		level = slog.LevelError
 	default:
-		level = proxymitm.LogLevelInfo
+		level = slog.LevelInfo
 	}
-	logger := proxymitm.NewDefaultLogger(level)
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: level,
+	}))
 
 	// Create MITM proxy
-	mp, err := proxymitm.CreateMitmProxy(*certPath, *keyPath)
+	mp, err := proxymitm.CreateMitmProxy(*certPath, *keyPath, logger)
 	if err != nil {
 		log.Fatalf("Failed to create MITM proxy: %v", err)
 	}

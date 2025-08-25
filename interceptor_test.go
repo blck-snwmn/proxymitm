@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,7 +20,7 @@ func TestLoggingInterceptor(t *testing.T) {
 	t.Parallel()
 
 	// Create a test logger
-	logger := NewDefaultLogger(LogLevelDebug)
+	logger := slog.Default()
 	interceptor := NewLoggingInterceptor(logger)
 
 	// Test request processing
@@ -71,7 +72,7 @@ func TestContentModifierInterceptor(t *testing.T) {
 	t.Parallel()
 
 	// Create a test logger
-	logger := NewDefaultLogger(LogLevelDebug)
+	logger := slog.Default()
 	interceptor := NewContentModifierInterceptor(logger)
 
 	// Add request header modifications
@@ -134,7 +135,7 @@ func TestFilteringInterceptor(t *testing.T) {
 	t.Parallel()
 
 	// Create a test logger
-	logger := NewDefaultLogger(LogLevelDebug)
+	logger := slog.Default()
 	interceptor := NewFilteringInterceptor(logger)
 
 	// Add blocked host names
@@ -220,7 +221,7 @@ func TestRequestIDInterceptor(t *testing.T) {
 	t.Parallel()
 
 	// Create a test logger
-	logger := NewDefaultLogger(LogLevelDebug)
+	logger := slog.Default()
 	interceptor := NewRequestIDInterceptor(logger)
 
 	// Test request processing

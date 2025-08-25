@@ -3,6 +3,7 @@ package proxymitm
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,13 +25,13 @@ type HTTPInterceptor interface {
 
 // LoggingInterceptor is an interceptor that logs the contents of requests and responses
 type LoggingInterceptor struct {
-	logger Logger
+	logger *slog.Logger
 }
 
 // NewLoggingInterceptor creates a new LoggingInterceptor
-func NewLoggingInterceptor(logger Logger) *LoggingInterceptor {
+func NewLoggingInterceptor(logger *slog.Logger) *LoggingInterceptor {
 	if logger == nil {
-		logger = NewDefaultLogger(LogLevelInfo)
+		logger = slog.Default()
 	}
 	return &LoggingInterceptor{
 		logger: logger,
@@ -39,18 +40,18 @@ func NewLoggingInterceptor(logger Logger) *LoggingInterceptor {
 
 // ProcessRequest logs the contents of a request
 func (li *LoggingInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
-	li.logger.Info("Request: %s %s", req.Method, req.URL)
+	li.logger.Info("Request", "method", req.Method, "url", req.URL.String())
 
 	// Log header contents
 	for name, values := range req.Header {
-		li.logger.Debug("Request Header: %s: %s", name, strings.Join(values, ", "))
+		li.logger.Debug("Request Header", "name", name, "values", strings.Join(values, ", "))
 	}
 
 	// Log request body contents if present
 	if req.Body != nil {
 		bodyBytes, err := io.ReadAll(req.Body)
 		if err != nil {
-			li.logger.Error("Failed to read request body: %v", err)
+			li.logger.Error("Failed to read request body", "error", err)
 			return req, false, err
 		}
 
@@ -59,9 +60,9 @@ func (li *LoggingInterceptor) ProcessRequest(req *http.Request) (*http.Request, 
 
 		// Log body contents (truncated if too long)
 		if len(bodyBytes) > 1024 {
-			li.logger.Debug("Request Body (truncated): %s...", bodyBytes[:1024])
+			li.logger.Debug("Request Body (truncated)", "body", string(bodyBytes[:1024])+"...")
 		} else if len(bodyBytes) > 0 {
-			li.logger.Debug("Request Body: %s", bodyBytes)
+			li.logger.Debug("Request Body", "body", string(bodyBytes))
 		}
 	}
 
@@ -70,18 +71,18 @@ func (li *LoggingInterceptor) ProcessRequest(req *http.Request) (*http.Request, 
 
 // ProcessResponse logs the contents of a response
 func (li *LoggingInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
-	li.logger.Info("Response: %d %s for %s %s", resp.StatusCode, resp.Status, req.Method, req.URL)
+	li.logger.Info("Response", "status_code", resp.StatusCode, "status", resp.Status, "method", req.Method, "url", req.URL.String())
 
 	// Log header contents
 	for name, values := range resp.Header {
-		li.logger.Debug("Response Header: %s: %s", name, strings.Join(values, ", "))
+		li.logger.Debug("Response Header", "name", name, "values", strings.Join(values, ", "))
 	}
 
 	// Log response body contents if present
 	if resp.Body != nil {
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
-			li.logger.Error("Failed to read response body: %v", err)
+			li.logger.Error("Failed to read response body", "error", err)
 			return resp, err
 		}
 
@@ -90,9 +91,9 @@ func (li *LoggingInterceptor) ProcessResponse(resp *http.Response, req *http.Req
 
 		// Log body contents (truncated if too long)
 		if len(bodyBytes) > 1024 {
-			li.logger.Debug("Response Body (truncated): %s...", bodyBytes[:1024])
+			li.logger.Debug("Response Body (truncated)", "body", string(bodyBytes[:1024])+"...")
 		} else if len(bodyBytes) > 0 {
-			li.logger.Debug("Response Body: %s", bodyBytes)
+			li.logger.Debug("Response Body", "body", string(bodyBytes))
 		}
 	}
 
@@ -110,13 +111,13 @@ type ContentModifierInterceptor struct {
 	// Response body replacement map (key: search string, value: replacement string)
 	bodyReplacements map[string]string
 
-	logger Logger
+	logger *slog.Logger
 }
 
 // NewContentModifierInterceptor creates a new ContentModifierInterceptor
-func NewContentModifierInterceptor(logger Logger) *ContentModifierInterceptor {
+func NewContentModifierInterceptor(logger *slog.Logger) *ContentModifierInterceptor {
 	if logger == nil {
-		logger = NewDefaultLogger(LogLevelInfo)
+		logger = slog.Default()
 	}
 	return &ContentModifierInterceptor{
 		requestHeaderModifications:  make(map[string]string),
@@ -145,7 +146,7 @@ func (cmi *ContentModifierInterceptor) AddBodyReplacement(search, replace string
 func (cmi *ContentModifierInterceptor) ProcessRequest(req *http.Request) (*http.Request, bool, error) {
 	// Apply header modifications
 	for header, value := range cmi.requestHeaderModifications {
-		cmi.logger.Debug("Modifying request header: %s: %s", header, value)
+		cmi.logger.Debug("Modifying request header", "header", header, "value", value)
 		req.Header.Set(header, value)
 	}
 
@@ -156,7 +157,7 @@ func (cmi *ContentModifierInterceptor) ProcessRequest(req *http.Request) (*http.
 func (cmi *ContentModifierInterceptor) ProcessResponse(resp *http.Response, req *http.Request) (*http.Response, error) {
 	// Apply header modifications
 	for header, value := range cmi.responseHeaderModifications {
-		cmi.logger.Debug("Modifying response header: %s: %s", header, value)
+		cmi.logger.Debug("Modifying response header", "header", header, "value", value)
 		resp.Header.Set(header, value)
 	}
 
@@ -164,7 +165,7 @@ func (cmi *ContentModifierInterceptor) ProcessResponse(resp *http.Response, req 
 	if len(cmi.bodyReplacements) > 0 && resp.Body != nil {
 		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
-			cmi.logger.Error("Failed to read response body: %v", err)
+			cmi.logger.Error("Failed to read response body", "error", err)
 			return resp, err
 		}
 		resp.Body.Close()
@@ -176,7 +177,7 @@ func (cmi *ContentModifierInterceptor) ProcessResponse(resp *http.Response, req 
 		// Apply replacements
 		for search, replace := range cmi.bodyReplacements {
 			if strings.Contains(bodyStr, search) {
-				cmi.logger.Debug("Replacing '%s' with '%s' in response body", search, replace)
+				cmi.logger.Debug("Replacing in response body", "search", search, "replace", replace)
 				bodyStr = strings.ReplaceAll(bodyStr, search, replace)
 				modified = true
 			}
@@ -215,13 +216,13 @@ type FilteringInterceptor struct {
 	blockResponseMessage string
 	blockResponseBody    string
 
-	logger Logger
+	logger *slog.Logger
 }
 
 // NewFilteringInterceptor creates a new FilteringInterceptor
-func NewFilteringInterceptor(logger Logger) *FilteringInterceptor {
+func NewFilteringInterceptor(logger *slog.Logger) *FilteringInterceptor {
 	if logger == nil {
-		logger = NewDefaultLogger(LogLevelInfo)
+		logger = slog.Default()
 	}
 	return &FilteringInterceptor{
 		blockedHosts:         make([]string, 0),
@@ -261,7 +262,7 @@ func (fi *FilteringInterceptor) ProcessRequest(req *http.Request) (*http.Request
 	// Host filtering
 	for _, blockedHost := range fi.blockedHosts {
 		if strings.Contains(req.Host, blockedHost) {
-			fi.logger.Info("Blocked request to host: %s", req.Host)
+			fi.logger.Info("Blocked request to host", "host", req.Host)
 			return req, true, nil // Skip subsequent interceptors and let ProcessResponse handle it
 		}
 	}
@@ -269,7 +270,7 @@ func (fi *FilteringInterceptor) ProcessRequest(req *http.Request) (*http.Request
 	// URL path filtering
 	for _, blockedPath := range fi.blockedPaths {
 		if strings.Contains(req.URL.Path, blockedPath) {
-			fi.logger.Info("Blocked request to path: %s", req.URL.Path)
+			fi.logger.Info("Blocked request to path", "path", req.URL.Path)
 			return req, true, nil // Skip subsequent interceptors and let ProcessResponse handle it
 		}
 	}
@@ -278,7 +279,7 @@ func (fi *FilteringInterceptor) ProcessRequest(req *http.Request) (*http.Request
 	userAgent := req.Header.Get("User-Agent")
 	for _, blockedUserAgent := range fi.blockedUserAgents {
 		if strings.Contains(userAgent, blockedUserAgent) {
-			fi.logger.Info("Blocked request with User-Agent: %s", userAgent)
+			fi.logger.Info("Blocked request with User-Agent", "user_agent", userAgent)
 			return req, true, nil // Skip subsequent interceptors and let ProcessResponse handle it
 		}
 	}
@@ -327,7 +328,7 @@ func (fi *FilteringInterceptor) ProcessResponse(resp *http.Response, req *http.R
 
 	// If request was blocked, return block response
 	if isBlocked {
-		fi.logger.Info("Returning block response for %s: %s", blockReason, req.URL)
+		fi.logger.Info("Returning block response", "reason", blockReason, "url", req.URL.String())
 		return fi.createBlockResponse(req), nil
 	}
 
@@ -364,13 +365,13 @@ type RequestIDInterceptor struct {
 	// Next request ID
 	nextID int
 
-	logger Logger
+	logger *slog.Logger
 }
 
 // NewRequestIDInterceptor creates a new RequestIDInterceptor
-func NewRequestIDInterceptor(logger Logger) *RequestIDInterceptor {
+func NewRequestIDInterceptor(logger *slog.Logger) *RequestIDInterceptor {
 	if logger == nil {
-		logger = NewDefaultLogger(LogLevelInfo)
+		logger = slog.Default()
 	}
 	return &RequestIDInterceptor{
 		requests:        make(map[string]*http.Request),
@@ -394,7 +395,7 @@ func (ri *RequestIDInterceptor) ProcessRequest(req *http.Request) (*http.Request
 	ri.requests[id] = req.Clone(req.Context())
 	ri.mutex.Unlock()
 
-	ri.logger.Debug("Assigned request ID: %s to %s %s", id, req.Method, req.URL)
+	ri.logger.Debug("Assigned request ID", "id", id, "method", req.Method, "url", req.URL.String())
 
 	return req, false, nil
 }
@@ -404,7 +405,7 @@ func (ri *RequestIDInterceptor) ProcessResponse(resp *http.Response, req *http.R
 	// Get request ID
 	id := req.Header.Get(ri.requestIDHeader)
 	if id == "" {
-		ri.logger.Warn("No request ID found in request: %s %s", req.Method, req.URL)
+		ri.logger.Warn("No request ID found in request", "method", req.Method, "url", req.URL.String())
 		return resp, nil
 	}
 
@@ -416,7 +417,7 @@ func (ri *RequestIDInterceptor) ProcessResponse(resp *http.Response, req *http.R
 	ri.responses[id] = resp
 	ri.mutex.Unlock()
 
-	ri.logger.Debug("Associated response with request ID: %s", id)
+	ri.logger.Debug("Associated response with request ID", "id", id)
 
 	return resp, nil
 }

@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"errors"
 	"io"
-	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -19,68 +18,6 @@ import (
 	"strings"
 	"time"
 )
-
-// LogLevel represents the logging level
-type LogLevel int
-
-const (
-	// LogLevelDebug represents the debug level log
-	LogLevelDebug LogLevel = iota
-	// LogLevelInfo represents the information level log
-	LogLevelInfo
-	// LogLevelWarn represents the warning level log
-	LogLevelWarn
-	// LogLevelError represents the error level log
-	LogLevelError
-)
-
-// Logger defines the logging interface
-type Logger interface {
-	Debug(format string, v ...interface{})
-	Info(format string, v ...interface{})
-	Warn(format string, v ...interface{})
-	Error(format string, v ...interface{})
-}
-
-// DefaultLogger is the default logger implementation
-type DefaultLogger struct {
-	level LogLevel
-}
-
-// NewDefaultLogger creates a new default logger
-func NewDefaultLogger(level LogLevel) *DefaultLogger {
-	return &DefaultLogger{
-		level: level,
-	}
-}
-
-// Debug outputs logs at debug level
-func (l *DefaultLogger) Debug(format string, v ...interface{}) {
-	if l.level <= LogLevelDebug {
-		log.Printf("[DEBUG] "+format, v...)
-	}
-}
-
-// Info outputs logs at information level
-func (l *DefaultLogger) Info(format string, v ...interface{}) {
-	if l.level <= LogLevelInfo {
-		log.Printf("[INFO] "+format, v...)
-	}
-}
-
-// Warn outputs logs at warning level
-func (l *DefaultLogger) Warn(format string, v ...interface{}) {
-	if l.level <= LogLevelWarn {
-		log.Printf("[WARN] "+format, v...)
-	}
-}
-
-// Error outputs logs at error level
-func (l *DefaultLogger) Error(format string, v ...interface{}) {
-	if l.level <= LogLevelError {
-		log.Printf("[ERROR] "+format, v...)
-	}
-}
 
 var (
 	internalServerError = []byte("HTTP/1.0 " + strconv.Itoa(http.StatusInternalServerError) + " \r\n\r\n")
@@ -467,9 +404,9 @@ func determineErrorType(err error) ErrorType {
 	if err == nil {
 		return ErrSendRequest
 	}
-	
+
 	errMsg := err.Error()
-	
+
 	// Check for gateway errors (DNS, connection issues)
 	if strings.Contains(errMsg, "no such host") ||
 		strings.Contains(errMsg, "server misbehaving") ||
@@ -478,13 +415,13 @@ func determineErrorType(err error) ErrorType {
 		strings.Contains(errMsg, "no route to host") {
 		return ErrGateway
 	}
-	
+
 	// Check for timeout errors
 	if strings.Contains(errMsg, "timeout") ||
 		strings.Contains(errMsg, "deadline exceeded") {
 		return ErrTimeout
 	}
-	
+
 	// Default to send request error
 	return ErrSendRequest
 }
@@ -502,7 +439,7 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 			statusCode = http.StatusBadGateway // 502
 		case ErrTimeout:
 			statusCode = http.StatusGatewayTimeout // 504
-		// ErrSendRequest and others default to 500
+			// ErrSendRequest and others default to 500
 		}
 
 		if hijacker, ok := w.(http.Hijacker); ok {
@@ -545,7 +482,7 @@ func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
 			statusCode = http.StatusBadGateway // 502
 		case ErrTimeout:
 			statusCode = http.StatusGatewayTimeout // 504
-		// ErrSendRequest and others default to 500
+			// ErrSendRequest and others default to 500
 		}
 
 		resp := &http.Response{

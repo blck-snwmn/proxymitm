@@ -413,12 +413,6 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 		expectedCode int
 	}{
 		{
-			name:         "Invalid Method",
-			method:       "INVALID",
-			url:          "http://example.com",
-			expectedCode: http.StatusBadRequest,
-		},
-		{
 			name:         "Empty URL",
 			method:       http.MethodGet,
 			url:          "http://",

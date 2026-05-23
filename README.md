@@ -12,7 +12,7 @@ sample proxy uing mitm
 
 ## Development
 
-CLI tools (`lefthook`) are managed by [aqua](https://aquaproj.github.io/) with versions pinned in [aqua.yaml](aqua.yaml).
+CLI tools (`lefthook`, `golangci-lint`) are managed by [aqua](https://aquaproj.github.io/) with versions pinned in [aqua.yaml](aqua.yaml).
 
 ### Install tools
 

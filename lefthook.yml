@@ -3,4 +3,4 @@ pre-commit:
   commands:
     lint:
       glob: "*.go"
-      run: go tool golangci-lint run
+      run: golangci-lint run

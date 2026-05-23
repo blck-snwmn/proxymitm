@@ -406,6 +406,15 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 	mp, err := CreateMitmProxy("./testdata/ca.crt", "./testdata/ca.key", nil)
 	require.NoError(t, err, "Should be able to create MitmProxy")
 
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "INVALID" {
+			http.Error(w, "unexpected method", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	t.Cleanup(upstream.Close)
+
 	tests := []struct {
 		name         string
 		method       string
@@ -413,10 +422,10 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 		expectedCode int
 	}{
 		{
-			name:         "Invalid Method",
+			name:         "Unknown Method",
 			method:       "INVALID",
-			url:          "http://example.com",
-			expectedCode: http.StatusBadRequest,
+			url:          upstream.URL,
+			expectedCode: http.StatusMethodNotAllowed,
 		},
 		{
 			name:         "Empty URL",

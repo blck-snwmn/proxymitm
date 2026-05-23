@@ -1,11 +1,14 @@
 [![CodeQL](https://github.com/blck-snwmn/proxymitm/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/blck-snwmn/proxymitm/actions/workflows/github-code-scanning/codeql)
 
-sample proxy uing mitm
+# proxymitm
+
+A sample Go MITM proxy for intercepting HTTP and HTTPS traffic.
 
 ## Usage
-1. create certificate
-1. server run
-1. do
+1. Create a CA certificate and key.
+1. Run the proxy server.
+1. Send traffic through the proxy.
+
     ```bash
     curl https://target -x localhost:18080 --cacert your_ca_path
     ```

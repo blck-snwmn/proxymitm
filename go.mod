@@ -2,7 +2,7 @@ module github.com/blck-snwmn/proxymitm
 
 go 1.24.1
 
-require github.com/stretchr/testify v1.10.0
+require github.com/stretchr/testify v1.11.1
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.2.1 // indirect

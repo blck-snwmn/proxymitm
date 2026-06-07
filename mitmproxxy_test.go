@@ -209,7 +209,9 @@ func TestMitmProxy_Handler(t *testing.T) {
 	// Send request
 	resp, err := client.Get(requestURL.String())
 	require.NoError(t, err, "Should be able to send request")
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// Ensure interceptor was called
 	assert.True(t, requestReceived, "Request interceptor should be called")
@@ -307,7 +309,9 @@ func TestMitmProxy_Connected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// Ensure response status is correct
 	if resp.StatusCode != http.StatusOK {
@@ -363,7 +367,9 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 
 		resp, err := client.Do(req)
 		require.NoError(t, err, "Should be able to send request")
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 
 		// Verify response
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "Should return OK status")
@@ -381,7 +387,9 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 		resp, err := client.Do(req)
 		// The proxy should return an error response, not fail the request entirely
 		require.NoError(t, err, "Should be able to send request")
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 
 		// The proxy returns 502 when it can't resolve the hostname
 		assert.Equal(t, http.StatusBadGateway, resp.StatusCode, "Should return 502 for unresolvable hostnames")
@@ -395,7 +403,9 @@ func TestServerMux_ServeHTTP_NonConnect(t *testing.T) {
 
 		resp, err := client.Do(req)
 		require.NoError(t, err, "Should be able to send request")
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode, "Should return 500 for invalid scheme requests")
 	})
@@ -494,7 +504,9 @@ func TestMitmProxy_WithInterceptors(t *testing.T) {
 	// Send request
 	resp, err := client.Do(req)
 	require.NoError(t, err, "Should be able to send request")
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// No need to verify request headers here as they are checked at the target server
 	// Verify response headers
@@ -813,7 +825,9 @@ func TestMitmProxy_InspectTLSTraffic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to send request through proxy: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
@@ -1000,7 +1014,9 @@ func TestNew(t *testing.T) {
 		// Create a test file with invalid certificate format
 		tempFile, err := os.CreateTemp("", "invalid-cert-*.crt")
 		require.NoError(t, err, "Should be able to create temp file")
-		defer os.Remove(tempFile.Name())
+		defer func() {
+			_ = os.Remove(tempFile.Name())
+		}()
 
 		_, err = tempFile.WriteString("THIS IS NOT A VALID CERTIFICATE")
 		require.NoError(t, err, "Should be able to write to temp file")

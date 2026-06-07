@@ -78,7 +78,9 @@ func (mp *ServerMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			mp.handleError(w, err)
 			return
 		}
-		defer con.Close()
+		defer func() {
+			_ = con.Close()
+		}()
 
 		if err := mp.handleConnect(con, r); err != nil {
 			mp.handleConnectError(con, err)
@@ -120,7 +122,9 @@ func (mp *ServerMux) handleConnect(con net.Conn, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	defer tlsConn.Close()
+	defer func() {
+		_ = tlsConn.Close()
+	}()
 
 	// Set TLS connection timeout
 	if err := tlsConn.SetDeadline(time.Now().Add(mp.readTimeout)); err != nil {
@@ -154,7 +158,9 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 
 	// Make sure to close the request body if it exists
 	if r.Body != nil {
-		defer r.Body.Close()
+		defer func() {
+			_ = r.Body.Close()
+		}()
 	}
 
 	var skipRemaining bool
@@ -186,7 +192,9 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 		errorType := determineErrorType(err)
 		return NewProxyError(errorType, "do_request", "failed to send request", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// Response interception processing
 	for _, interceptor := range mp.interceptors {
@@ -226,7 +234,9 @@ func (mp *ServerMux) writeConnectionEstablished(con net.Conn) error {
 func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 	// Make sure to close the request body if it exists
 	if req.Body != nil {
-		defer req.Body.Close()
+		defer func() {
+			_ = req.Body.Close()
+		}()
 	}
 
 	var err error
@@ -251,7 +261,9 @@ func (mp *ServerMux) forwardRequest(conn net.Conn, req *http.Request) error {
 		errorType := determineErrorType(err)
 		return NewProxyError(errorType, "do_request", "failed to send request", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// Response interception processing
 	for _, interceptor := range mp.interceptors {
@@ -455,7 +467,9 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 
 		if hijacker, ok := w.(http.Hijacker); ok {
 			if conn, _, err := hijacker.Hijack(); err == nil {
-				defer conn.Close()
+				defer func() {
+					_ = conn.Close()
+				}()
 				resp := &http.Response{
 					StatusCode: statusCode,
 					Status:     http.StatusText(statusCode),
@@ -561,7 +575,7 @@ func (c *InspectingHTTPClient) Do(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		// Record the body
 		c.BodyLog = append(c.BodyLog, string(body))

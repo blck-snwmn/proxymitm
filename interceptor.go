@@ -168,7 +168,7 @@ func (cmi *ContentModifierInterceptor) ProcessResponse(resp *http.Response, req 
 			cmi.logger.Error("Failed to read response body", "error", err)
 			return resp, err
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		// Convert body content to string
 		bodyStr := string(bodyBytes)

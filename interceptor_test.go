@@ -347,7 +347,9 @@ func TestInterceptorChain(t *testing.T) {
 	// Send request
 	resp, err := client.Do(req)
 	require.NoError(t, err, "Should be able to send request")
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// No need to verify request headers here as they are checked at the target server
 
@@ -409,7 +411,9 @@ func TestFilteringInterceptorBlock(t *testing.T) {
 	// Send request
 	resp, err := client.Do(req)
 	require.NoError(t, err, "Should be able to send request")
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	// Verify response status code
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode, "Response status code should be 403 Forbidden")

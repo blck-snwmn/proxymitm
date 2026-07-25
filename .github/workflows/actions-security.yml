@@ -25,12 +25,13 @@ jobs:
         with:
           aqua_version: v2.62.0
 
-      - name: Check action pinning
-        run: pinact run --check
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - parallel:
+          - name: Check action pinning
+            run: pinact run --check
+            env:
+              GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Audit workflows
-        run: zizmor --format github .
-        env:
-          GH_TOKEN: ${{ github.token }}
+          - name: Audit workflows
+            run: zizmor --format github .
+            env:
+              GH_TOKEN: ${{ github.token }}

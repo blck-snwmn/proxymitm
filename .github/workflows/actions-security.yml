@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  pinact:
-    name: Check action pinning
+  actions-security:
+    name: Check workflows
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,26 +25,13 @@ jobs:
         with:
           aqua_version: v2.62.3
 
-      - name: Check action pinning
-        run: pinact run --check
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+      - parallel:
+          - name: Check action pinning
+            run: pinact run --check
+            env:
+              GITHUB_TOKEN: ${{ github.token }}
 
-  zizmor:
-    name: Audit workflows
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install aqua tools
-        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
-        with:
-          aqua_version: v2.62.3
-
-      - name: Audit workflows
-        run: zizmor --format github .
-        env:
-          GH_TOKEN: ${{ github.token }}
+          - name: Audit workflows
+            run: zizmor --format github .
+            env:
+              GH_TOKEN: ${{ github.token }}

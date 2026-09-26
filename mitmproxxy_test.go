@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -95,7 +96,6 @@ func Test_createX509Certificate(t *testing.T) {
 	require.NoError(t, err, "Should be able to create MitmProxy")
 
 	for _, tt := range tests {
-		tt := tt // Variable shadowing for captured variables
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			template := mitmx509template(tt.args.hostName)
@@ -431,7 +431,6 @@ func TestServerMux_ServeHTTP_Errors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			req := httptest.NewRequest(tt.method, tt.url, nil)
@@ -581,8 +580,8 @@ func TestMitmProxy_InterceptorChain(t *testing.T) {
 	modifiedResp := resp
 	var respErr error
 
-	for i := len(mp.interceptors) - 1; i >= 0; i-- {
-		modifiedResp, respErr = mp.interceptors[i].ProcessResponse(modifiedResp, modifiedReq)
+	for _, v := range slices.Backward(mp.interceptors) {
+		modifiedResp, respErr = v.ProcessResponse(modifiedResp, modifiedReq)
 		require.NoError(t, respErr, "ProcessResponse failed")
 	}
 
@@ -920,7 +919,6 @@ func TestSlogLogger(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			// Set up a separate logger output for testing
@@ -1084,7 +1082,6 @@ func TestDetermineErrorType(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			result := determineErrorType(tt.err)

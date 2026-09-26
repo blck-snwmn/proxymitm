@@ -75,8 +75,7 @@ func IsErrorType(err error, typ ErrorType) bool {
 // GetProxyError retrieves a ProxyError from an error
 // Returns nil if not a ProxyError
 func GetProxyError(err error) *ProxyError {
-	var proxyErr *ProxyError
-	if errors.As(err, &proxyErr) {
+	if proxyErr, ok := errors.AsType[*ProxyError](err); ok {
 		return proxyErr
 	}
 	return nil

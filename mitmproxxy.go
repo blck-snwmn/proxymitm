@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math/big"
 	"net"
 	"net/http"
@@ -152,9 +153,7 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 	req = req.WithContext(r.Context())
 
 	// Copy headers from original request
-	for k, v := range r.Header {
-		req.Header[k] = v
-	}
+	maps.Copy(req.Header, r.Header)
 
 	// Make sure to close the request body if it exists
 	if r.Body != nil {
@@ -182,9 +181,7 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 	for k := range r.Header {
 		r.Header.Del(k)
 	}
-	for k, v := range req.Header {
-		r.Header[k] = v
-	}
+	maps.Copy(r.Header, req.Header)
 
 	mp.logger.Debug("Sending request", "url", req.URL.String())
 	resp, err := mp.client.Do(req)
@@ -208,9 +205,7 @@ func (mp *ServerMux) handleNonConnect(w http.ResponseWriter, r *http.Request) er
 	mp.logger.Debug("Writing response", "status", resp.StatusCode)
 
 	// Copy headers
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
+	maps.Copy(w.Header(), resp.Header)
 
 	// Write status code
 	w.WriteHeader(resp.StatusCode)

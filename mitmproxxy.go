@@ -367,8 +367,8 @@ func (mp *ServerMux) tlsHandshake(con net.Conn, hostName string) (*tls.Conn, err
 		PrivateKey:  pk,
 	}
 
-	config := tls.Config{}
-	config.Certificates = []tls.Certificate{cert}
+	config := tls.Config{
+		Certificates: []tls.Certificate{cert}}
 
 	tlsConn := tls.Server(con, &config)
 	if err = tlsConn.Handshake(); err != nil {
@@ -446,8 +446,7 @@ func determineErrorType(err error) ErrorType {
 
 // handleError provides unified error handling
 func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
-	var proxyErr *ProxyError
-	if errors.As(err, &proxyErr) {
+	if proxyErr, ok := errors.AsType[*ProxyError](err); ok {
 		mp.logger.Error("Proxy error", "error", proxyErr)
 
 		// Determine the appropriate status code based on error type
@@ -491,8 +490,7 @@ func (mp *ServerMux) handleError(w http.ResponseWriter, err error) {
 
 // handleConnectError provides error handling for the CONNECT method
 func (mp *ServerMux) handleConnectError(con net.Conn, err error) {
-	var proxyErr *ProxyError
-	if errors.As(err, &proxyErr) {
+	if proxyErr, ok := errors.AsType[*ProxyError](err); ok {
 		mp.logger.Error("Connect error", "error", proxyErr)
 
 		// Determine the appropriate status code based on error type

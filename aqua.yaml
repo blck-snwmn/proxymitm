@@ -9,7 +9,7 @@
 #   - all
 registries:
   - type: standard
-    ref: v4.568.0 # renovate: depName=aquaproj/aqua-registry
+    ref: v4.569.0 # renovate: depName=aquaproj/aqua-registry
 packages:
   - name: evilmartians/lefthook@v2.1.15
   - name: golangci/golangci-lint@v2.14.0

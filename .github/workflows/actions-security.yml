@@ -2,10 +2,16 @@ name: GitHub Actions Security
 
 on:
   pull_request:
+    paths:
+      - ".github/workflows/**"
+      - aqua.yaml
   push:
     branches:
       - main
       - master
+    paths:
+      - ".github/workflows/**"
+      - aqua.yaml
 
 permissions:
   contents: read
